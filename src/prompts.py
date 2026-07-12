@@ -63,6 +63,44 @@ Valores baixos indicam que a existência ou classificação daquele elemento é 
 incerta; mencione essa incerteza ao invés de tratá-la como um fato do \
 diagrama.
 
+## Atenção redobrada a fronteiras cruzadas
+
+Na metodologia STRIDE, as fronteiras de confiança (`trust_boundaries`) são o \
+ponto onde as ameaças se concentram: é ao cruzar uma fronteira que dados e \
+requisições passam de um domínio de controle para outro. Por isso, dê \
+prioridade e profundidade extra aos **fluxos de dados que cruzam uma \
+fronteira de confiança**.
+
+Um `data_flow` **cruza uma fronteira** quando seus dois componentes \
+(`source` e `target`) NÃO pertencem à mesma zona de confiança. Isso cobre \
+dois casos, ambos possíveis no JSON:
+
+1. Um dos componentes (ou ambos) está em `unassigned_components` — isto é, \
+fora de qualquer zona (o "exterior") — e o outro está dentro de uma \
+`trust_boundary`.
+2. Os dois componentes estão em `trust_boundaries` **diferentes** \
+(comunicação entre zonas distintas).
+
+Para todo fluxo que cruza uma fronteira, priorize e aprofunde a análise de \
+duas categorias STRIDE acima das demais (sem omitir as outras quatro, mas \
+dedicando justificativa e contramedidas mais detalhadas a estas):
+
+- **Spoofing**: um agente do lado externo da fronteira pode se passar por um \
+componente interno legítimo se a fronteira não impuser autenticação forte na \
+entrada. Cruzar do exterior para dentro de uma zona sensível (por exemplo, \
+uma zona de "Backend Systems") sem verificação de identidade robusta é o \
+vetor clássico de comprometimento inicial.
+- **Elevation of Privilege**: uma vez que o agente atravessa a fronteira, ele \
+tende a herdar o nível de confiança e os privilégios da zona de destino — \
+operando com permissões que não possui legitimamente. A combinação \
+Spoofing + Elevation of Privilege (autenticar-se como interno e então agir \
+com privilégios indevidos) é o padrão de ataque que uma fronteira mal \
+defendida habilita.
+
+Esta ênfase vale mesmo quando a zona de destino não tem `label` legível \
+(`label == ""`): a ausência de rótulo não elimina o fato de ser uma zona de \
+confiança distinta que está sendo cruzada.
+
 ## Tarefa
 
 Usando exclusivamente as informações do JSON fornecido:
@@ -71,8 +109,10 @@ Usando exclusivamente as informações do JSON fornecido:
 `unassigned_components`), identifique quais categorias STRIDE se aplicam, \
 considerando a zona de confiança em que está inserido (ou a ausência dela).
 2. Para cada fluxo de dados em `data_flows`, identifique quais categorias \
-STRIDE se aplicam à comunicação entre os dois componentes conectados, \
-considerando se essa comunicação cruza uma fronteira de confiança.
+STRIDE se aplicam à comunicação entre os dois componentes conectados. Se o \
+fluxo cruza uma fronteira de confiança, aplique a priorização descrita em \
+"Atenção redobrada a fronteiras cruzadas" (aprofundar Spoofing e Elevation \
+of Privilege).
 3. Dê atenção especial a componentes em `unassigned_components`, explicando \
 o risco estrutural de não estarem associados a nenhuma zona de confiança.
 
