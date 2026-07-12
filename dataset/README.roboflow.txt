@@ -1,8 +1,8 @@
 
-Hackathon - v10 final_version
+Hackathon - v11 final_version
 ==============================
 
-This dataset was exported via roboflow.com on July 12, 2026 at 3:21 AM GMT
+This dataset was exported via roboflow.com on July 12, 2026 at 5:07 PM GMT
 
 Roboflow is an end-to-end computer vision platform that helps you
 * collaborate with your team on computer vision projects
@@ -17,7 +17,7 @@ visit https://github.com/roboflow/notebooks
 
 To find over 100k other datasets and pre-trained models, visit https://universe.roboflow.com
 
-The dataset includes 256 images.
+The dataset includes 382 images.
 Hackathon are annotated in YOLOv8 format.
 
 The following pre-processing was applied to each image:
