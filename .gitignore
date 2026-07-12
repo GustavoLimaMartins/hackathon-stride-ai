@@ -1,0 +1,31 @@
+# Segredos e variáveis de ambiente (chaves de API do LLM, etc.)
+.env
+.env.*
+!.env.example
+
+# Ambiente virtual Python
+.venv/
+venv/
+
+# Artefatos de treino do Ultralytics (logs, curvas, checkpoints intermediários)
+runs/
+
+# Pesos de modelo (não versionar exceto o modelo final do projeto)
+*.pt
+!models/best.pt
+
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Artefatos do EasyOCR (modelos baixados em cache) e uploads temporários
+*.tmp
+
+# IDE / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 7
+names: ['actor', 'api_gateway', 'compute', 'data_flow', 'database_storage', 'network_security', 'trust_boundary']
+
+roboflow:
+  workspace: gustavo-lima-vprcy
+  project: hackathon-vp4zy
+  version: 4
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/gustavo-lima-vprcy/hackathon-vp4zy/dataset/4
