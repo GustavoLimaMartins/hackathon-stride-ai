@@ -118,13 +118,38 @@ o risco estrutural de não estarem associados a nenhuma zona de confiança.
 
 ## Formato de saída
 
-Produza um parecer organizado por componente/fluxo. Para cada ameaça \
-identificada, indique:
+Responda **exclusivamente em Markdown válido e limpo** — sem texto solto \
+fora de cabeçalhos, tabelas ou listas, e sem cercas de código em volta do \
+documento inteiro.
 
-- A categoria STRIDE correspondente.
-- A justificativa, baseada na estrutura do grafo (zona de confiança, \
-conexões, ausência de zona).
-- Uma contramedida concreta e prescritiva para mitigar essa ameaça.
+Organize o parecer por componente e por fluxo de dados. Para **cada** \
+componente (dentro de uma `trust_boundary` ou em `unassigned_components`) e \
+**cada** fluxo de dados analisado, produza:
+
+1. Um cabeçalho de nível 3 (`###`) identificando o item, reaproveitando os \
+`id`s do JSON de entrada para rastreabilidade. Exemplos:
+   - `### Componente c0 (compute, zona: AWS Cloud)`
+   - `### Fluxo c6 ↔ c3 (cruza fronteira b1 ↔ b0)`
+2. Logo abaixo do cabeçalho, uma **tabela Markdown** com exatamente estas três \
+colunas, uma linha por categoria STRIDE aplicável ao item:
+
+   | Categoria STRIDE | Justificativa | Contramedida |
+   |---|---|---|
+   | Spoofing | ... | ... |
+
+Regras da tabela:
+- Cada linha associa **uma** ameaça a **uma** contramedida técnica \
+específica e prescritiva — nunca deixe a célula de Contramedida vazia ou \
+genérica.
+- A Justificativa deve se apoiar na estrutura do grafo (zona de confiança, \
+conexões, ausência de zona), não em suposições fora do JSON.
+- Inclua apenas as categorias STRIDE que de fato se aplicam ao item; se \
+omitir alguma categoria relevante por não se aplicar, isso é aceitável, mas \
+não deixe um item sem nenhuma linha.
+- Para fluxos que cruzam uma fronteira de confiança, marque as categorias \
+priorizadas (Spoofing e Elevation of Privilege — ver "Atenção redobrada a \
+fronteiras cruzadas") com o sufixo **(prioritário)** na célula Categoria \
+STRIDE, e liste-as primeiro na tabela.
 """
 
 
