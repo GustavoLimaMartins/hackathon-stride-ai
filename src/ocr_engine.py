@@ -76,7 +76,7 @@ def load_reader() -> easyocr.Reader:
 def extract_text(
     image: str | Path | bytes | BytesIO,
     trust_boundaries: list[dict],
-    to_gray: bool = True,
+    to_gray: bool = False,
 ) -> list[dict]:
     """Recorta cada trust_boundary da imagem e roda OCR apenas nesses recortes.
 
@@ -88,8 +88,10 @@ def extract_text(
         superior-esquerdo do recorte (string vazia se nenhuma leitura estiver
         próxima o bastante do canto — ver _select_zone_label).
 
-    Quando to_gray=True (padrão), usa a mesma imagem grayscale vista pelo YOLO,
-    garantindo que os recortes venham exatamente da imagem processada na detecção.
+    O default de to_gray deve casar com o usado em vision.detect() para que os
+    recortes venham exatamente da mesma imagem que produziu as bboxes. Ambos
+    usam RGB por padrão (to_gray=False); passe to_gray=True em ambos se estiver
+    rodando o modelo grayscale legado.
     """
     if not trust_boundaries:
         return []

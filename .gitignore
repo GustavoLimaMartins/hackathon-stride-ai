@@ -9,6 +9,7 @@ venv/
 
 # Artefatos de treino do Ultralytics (logs, curvas, checkpoints intermediários)
 runs/
+dataset_old/
 
 # Pesos de modelo (não versionar exceto o modelo final do projeto)
 *.pt

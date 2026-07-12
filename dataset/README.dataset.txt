@@ -1,4 +1,4 @@
-# Hackathon > 2026-07-11 7:03pm
+# Hackathon > final_version
 https://universe.roboflow.com/gustavo-lima-vprcy/hackathon-vp4zy
 
 Provided by a Roboflow user

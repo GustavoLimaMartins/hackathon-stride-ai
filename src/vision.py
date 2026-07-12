@@ -1,8 +1,10 @@
 """Triagem de inferência: detecta os elementos de um diagrama de arquitetura via YOLO.
 
-O modelo foi treinado sobre imagens pré-processadas em escala de cinza (grayscale)
-pelo Roboflow, então a imagem de entrada passa pela mesma conversão antes da
-inferência, mantendo paridade entre o domínio de treino e o de inferência.
+Por padrão a imagem de entrada é processada em RGB (cores preservadas). A cor é
+um sinal semântico forte em ícones de serviços cloud (AWS/Azure/GCP): compute,
+database e storage se distinguem primariamente pela cor. Converter para
+grayscale descarta esse sinal e cria um gargalo de informação que tende a
+agravar overfitting em datasets pequenos.
 """
 
 from __future__ import annotations
@@ -15,6 +17,9 @@ from PIL import Image
 from ultralytics import YOLO
 
 MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "best.pt"
+
+# Tamanho de inferência: o modelo foi treinado com imgsz=512 (ver train.py).
+_INFERENCE_IMGSZ = 512
 
 _model: YOLO | None = None
 
@@ -35,13 +40,14 @@ def _load_image(image: str | Path | bytes | BytesIO) -> Image.Image:
 
 
 def detect(
-    image: str | Path | bytes | BytesIO, to_gray: bool = True
+    image: str | Path | bytes | BytesIO, to_gray: bool = False
 ) -> tuple[list[dict], list[dict]]:
     """Roda a inferência YOLO e separa as detecções em duas listas.
 
-    Se to_gray=True (padrão), converte a imagem para escala de cinza antes da
-    inferência, replicando o pré-processamento aplicado pelo Roboflow no dataset
-    de treino e mantendo paridade entre o domínio de treino e o de inferência.
+    Por padrão (to_gray=False) a inferência roda sobre a imagem em RGB,
+    preservando a cor — sinal semântico forte para ícones de serviços cloud.
+    Passe to_gray=True para replicar o pré-processamento grayscale do dataset
+    de treino atual.
 
     Retorna (trust_boundaries, other_components), onde a primeira lista contém
     exclusivamente as caixas da classe 'trust_boundary' e a segunda contém todos
@@ -54,7 +60,9 @@ def detect(
     else:
         processed = processed.convert("RGB")
 
-    results = model.predict(np.array(processed), verbose=False)[0]
+    results = model.predict(
+        np.array(processed), imgsz=_INFERENCE_IMGSZ, verbose=False
+    )[0]
 
     trust_boundaries: list[dict] = []
     other_components: list[dict] = []

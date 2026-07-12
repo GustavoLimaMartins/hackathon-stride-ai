@@ -25,7 +25,7 @@ def main() -> None:
 
     model.train(
         data=str(DATA_YAML),
-        epochs=115,
+        epochs=100,
         imgsz=512,
         project=str(PROJECT_ROOT / "runs" / "detect"),
         name="train",
