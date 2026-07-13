@@ -17,12 +17,19 @@ Execução:
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # 'streamlit run src/main.py' coloca a pasta src/ no sys.path (não a raiz), então
 # os imports 'from src.xxx' abaixo não seriam resolvidos. Garantir a raiz do
 # projeto no path faz o app rodar de qualquer diretório de trabalho.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+# Carrega o .env da raiz do projeto para o ambiente, tornando a OPENAI_API_KEY
+# visível ao stride_engine. Sem isso, o app roda mas a análise STRIDE falha com
+# "OPENAI_API_KEY não configurada" (o load_llm levanta RuntimeError).
+load_dotenv(_PROJECT_ROOT / ".env")
 
 import streamlit as st
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -69,7 +76,7 @@ if uploaded_file is not None:
     st.image(
         uploaded_file,
         caption=f"Diagrama enviado: {uploaded_file.name}",
-        use_container_width=True,
+        width="stretch",
     )
 
     if st.button("🔍 Analisar diagrama", type="primary"):
@@ -134,7 +141,7 @@ if uploaded_file is not None:
             st.image(
                 overlay,
                 caption="Detecções do modelo de visão computacional (YOLO).",
-                use_container_width=True,
+                width="stretch",
             )
 
             legend = legend_items(trust_boundaries, components)
