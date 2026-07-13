@@ -77,15 +77,42 @@ if uploaded_file is not None:
             with st.spinner("Montando o grafo hierárquico (LangGraph + LLM)..."):
                 graph = to_json(trust_boundaries, components)
 
-            with st.spinner(
-                "Gerando parecer STRIDE (isso pode levar até um minuto)..."
-            ):
-                llm = load_llm("analyst")
-                messages = [
-                    SystemMessage(content=STRIDE_ANALYST_SYSTEM_PROMPT),
-                    HumanMessage(content=build_stride_user_message(graph)),
-                ]
-                response = llm.invoke(messages)
+            llm = load_llm("analyst")
+            messages = [
+                SystemMessage(content=STRIDE_ANALYST_SYSTEM_PROMPT),
+                HumanMessage(content=build_stride_user_message(graph)),
+            ]
+
+            # O 'analyst' (gpt-5) é um modelo de reasoning: ele "pensa" por dezenas
+            # de segundos antes de emitir o primeiro token. O spinner cobre essa
+            # espera inicial; assim que o primeiro pedaço de texto chega, cedemos
+            # lugar ao streaming token a token (que já é o indicador de progresso).
+            token_stream = llm.stream(messages)
+            chunks: list[str] = []
+
+            with st.spinner("O modelo está analisando o diagrama (STRIDE)..."):
+                first_chunk = ""
+                for chunk in token_stream:
+                    if chunk.content:
+                        first_chunk = chunk.content
+                        chunks.append(first_chunk)
+                        break
+
+            st.divider()
+            st.subheader("📋 Parecer STRIDE")
+
+            def _stream_response():
+                # Reemite o primeiro chunk já consumido (fora do spinner) e segue
+                # com o restante do stream. Acumula em 'chunks' para ter a resposta
+                # completa garantida ao final, independente do retorno do widget.
+                if first_chunk:
+                    yield first_chunk
+                for chunk in token_stream:
+                    chunks.append(chunk.content)
+                    yield chunk.content
+
+            st.write_stream(_stream_response)
+            full_response = "".join(chunks)
 
         except RuntimeError as e:
             # Ex.: OPENAI_API_KEY ausente (erro claro levantado por load_llm).
@@ -94,10 +121,6 @@ if uploaded_file is not None:
         except Exception as e:
             st.error(f"Falha ao processar o diagrama: {e}")
             st.stop()
-
-        st.divider()
-        st.subheader("📋 Parecer STRIDE")
-        st.markdown(response.content)
 
         with st.expander("Ver JSON do grafo (dados intermediários)"):
             st.json(graph)
