@@ -21,6 +21,14 @@ MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "best.pt"
 # Tamanho de inferência: o modelo foi treinado com imgsz=512 (ver train.py).
 _INFERENCE_IMGSZ = 512
 
+# Confiança mínima para uma detecção ser mantida (global, todas as classes).
+# 'data_flow' (as setas) é a classe mais ruidosa do modelo: medido no val set,
+# mediana de confiança de apenas 0.117 e 77% das detecções abaixo de 0.25 —
+# a maior parte são falsos positivos contra o fundo ou confusões com
+# 'api_gateway'. Filtrar por confiança ataca o ruído na inferência, sem exigir
+# remover a classe do dataset nem retreinar o modelo.
+_MIN_CONFIDENCE = 0.25
+
 _model: YOLO | None = None
 
 
@@ -51,7 +59,9 @@ def detect(
 
     Retorna (trust_boundaries, other_components), onde a primeira lista contém
     exclusivamente as caixas da classe 'trust_boundary' e a segunda contém todos
-    os demais componentes e setas.
+    os demais componentes e setas. Detecções com confiança abaixo de
+    _MIN_CONFIDENCE (25%, global para todas as classes) são descartadas — filtro
+    aplicado nativamente pelo YOLO via o parâmetro 'conf' do predict().
     """
     model = load_model()
     processed = _load_image(image)
@@ -61,7 +71,10 @@ def detect(
         processed = processed.convert("RGB")
 
     results = model.predict(
-        np.array(processed), imgsz=_INFERENCE_IMGSZ, verbose=False
+        np.array(processed),
+        imgsz=_INFERENCE_IMGSZ,
+        conf=_MIN_CONFIDENCE,
+        verbose=False,
     )[0]
 
     trust_boundaries: list[dict] = []
