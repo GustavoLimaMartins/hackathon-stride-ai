@@ -14,6 +14,16 @@ Execução:
     streamlit run src/main.py
 """
 
+import sys
+from pathlib import Path
+
+# 'streamlit run src/main.py' coloca a pasta src/ no sys.path (não a raiz), então
+# os imports 'from src.xxx' abaixo não seriam resolvidos. Garantir a raiz do
+# projeto no path faz o app rodar de qualquer diretório de trabalho.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 import streamlit as st
 from langchain_core.messages import HumanMessage, SystemMessage
 
