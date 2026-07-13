@@ -139,11 +139,15 @@ def connect_data_flows(components: list[dict]) -> list[dict]:
 def _clean_component(component: dict, comp_id: str) -> dict:
     """Objeto de componente para o JSON: id + campos essenciais, sem redundância.
 
-    Omite 'trust_boundary' (a posição do componente dentro do JSON já expressa a
-    zona) e 'data_flow' não chega aqui — setas viram conexões, não nós.
+    Inclui 'name' (rótulo real lido por OCR, ex.: "Amazon Lambda") quando
+    disponível — é o que permite o parecer STRIDE referenciar o componente pelo
+    nome em vez do id genérico. Omite 'trust_boundary' (a posição do componente
+    dentro do JSON já expressa a zona) e 'data_flow' não chega aqui — setas viram
+    conexões, não nós.
     """
     return {
         "id": comp_id,
+        "name": component.get("name", ""),
         "class": component["class"],
         "bbox": [float(v) for v in component["bbox"]],
         "confidence": float(component["confidence"]),

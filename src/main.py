@@ -35,7 +35,7 @@ import streamlit as st
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.graph_builder import to_json
-from src.ocr_engine import extract_text
+from src.ocr_engine import assign_component_names, extract_text
 from src.prompts import STRIDE_ANALYST_SYSTEM_PROMPT, build_stride_user_message
 from src.stride_engine import load_llm
 from src.vision import detect
@@ -91,6 +91,12 @@ if uploaded_file is not None:
             with st.spinner("Lendo rótulos das zonas de confiança (OCR)..."):
                 uploaded_file.seek(0)
                 trust_boundaries = extract_text(uploaded_file, trust_boundaries)
+
+            with st.spinner("Associando rótulos aos componentes (OCR)..."):
+                uploaded_file.seek(0)
+                components = assign_component_names(
+                    uploaded_file, components, trust_boundaries
+                )
 
             with st.spinner("Montando o grafo hierárquico (LangGraph + LLM)..."):
                 graph = to_json(trust_boundaries, components)

@@ -57,6 +57,11 @@ um fluxo.
 - Cada componente tem `class`, uma das categorias detectadas pelo modelo de \
 visão: `actor`, `api_gateway`, `compute`, `database_storage` ou \
 `network_security`.
+- Cada componente tem `name`: o rótulo textual real lido do diagrama por OCR \
+(ex.: "Amazon Lambda", "Redshift", "IAM"). Pode ser vazio (`""`) quando o OCR \
+não encontrou um rótulo legível próximo ao componente. **Sempre que `name` for \
+não-vazio, refira-se ao componente por esse nome real** — é o identificador \
+que o leitor humano reconhece no diagrama.
 - `confidence` em cada componente/zona é a confiança da detecção do modelo \
 de visão computacional — não é a confiança da sua própria análise de ameaça. \
 Valores baixos indicam que a existência ou classificação daquele elemento é \
@@ -126,10 +131,13 @@ Organize o parecer por componente e por fluxo de dados. Para **cada** \
 componente (dentro de uma `trust_boundary` ou em `unassigned_components`) e \
 **cada** fluxo de dados analisado, produza:
 
-1. Um cabeçalho de nível 3 (`###`) identificando o item, reaproveitando os \
-`id`s do JSON de entrada para rastreabilidade. Exemplos:
-   - `### Componente c0 (compute, zona: AWS Cloud)`
-   - `### Fluxo c6 ↔ c3 (cruza fronteira b1 ↔ b0)`
+1. Um cabeçalho de nível 3 (`###`) identificando o item. Refira-se a cada \
+componente pelo seu `name` real quando não-vazio; quando `name` for vazio, use \
+o formato `<class> (<id>)`. Para fluxos, identifique as duas pontas pela mesma \
+regra (nome real, ou `<class> (<id>)` no fallback). Exemplos:
+   - `### Componente Amazon Lambda (compute, zona: AWS Cloud)`
+   - `### Componente compute (c4) (zona: AWS Cloud)`  ← quando name é vazio
+   - `### Fluxo Amazon API Gateway ↔ AWS Lambda (cruza fronteira b1 ↔ b0)`
 2. Logo abaixo do cabeçalho, uma **tabela Markdown** com exatamente estas três \
 colunas, uma linha por categoria STRIDE aplicável ao item:
 
@@ -142,7 +150,10 @@ Regras da tabela:
 específica e prescritiva — nunca deixe a célula de Contramedida vazia ou \
 genérica.
 - A Justificativa deve se apoiar na estrutura do grafo (zona de confiança, \
-conexões, ausência de zona), não em suposições fora do JSON.
+conexões, ausência de zona), não em suposições fora do JSON. Ao mencionar \
+outros componentes na justificativa (ex.: "comunica-se com ..."), use também \
+o `name` real deles (ou `<class> (<id>)` se sem nome) — nunca o id cru \
+sozinho como "c15".
 - Inclua apenas as categorias STRIDE que de fato se aplicam ao item; se \
 omitir alguma categoria relevante por não se aplicar, isso é aceitável, mas \
 não deixe um item sem nenhuma linha.
