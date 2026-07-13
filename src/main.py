@@ -22,6 +22,7 @@ from src.ocr_engine import extract_text
 from src.prompts import STRIDE_ANALYST_SYSTEM_PROMPT, build_stride_user_message
 from src.stride_engine import load_llm
 from src.vision import detect
+from src.visual_report import draw_overlay, legend_items
 
 # set_page_config deve ser a primeira chamada Streamlit do script.
 st.set_page_config(
@@ -113,6 +114,26 @@ if uploaded_file is not None:
 
             st.write_stream(_stream_response)
             full_response = "".join(chunks)
+
+            # Seção visual: as caixas detectadas plotadas sobre a imagem enviada,
+            # dando a visão espacial de "o que o modelo viu" ao lado do parecer.
+            st.divider()
+            st.subheader("🖼️ Componentes detectados")
+            uploaded_file.seek(0)
+            overlay = draw_overlay(uploaded_file, trust_boundaries, components)
+            st.image(
+                overlay,
+                caption="Detecções do modelo de visão computacional (YOLO).",
+                use_container_width=True,
+            )
+
+            legend = legend_items(trust_boundaries, components)
+            if legend:
+                badges = "&nbsp;&nbsp;".join(
+                    f"<span style='color:{hex_color}; font-size:1.3em'>■</span> {cls}"
+                    for cls, hex_color in legend
+                )
+                st.markdown(f"**Legenda:** {badges}", unsafe_allow_html=True)
 
         except RuntimeError as e:
             # Ex.: OPENAI_API_KEY ausente (erro claro levantado por load_llm).
