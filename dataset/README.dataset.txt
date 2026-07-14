@@ -1,4 +1,4 @@
-# Hackathon > final_version
+# Hackathon > new_version
 https://universe.roboflow.com/gustavo-lima-vprcy/hackathon-vp4zy
 
 Provided by a Roboflow user
