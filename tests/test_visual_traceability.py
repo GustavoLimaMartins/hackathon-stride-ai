@@ -13,7 +13,7 @@ import numpy as np
 from PIL import Image
 
 from src.graph_builder import to_json
-from src.stride_models import Risk, severity_rank
+from src.stride_models import Risk, group_risks, severity_rank
 from src.visual_report import (
     crop_region,
     draw_numbered_overlay,
@@ -147,7 +147,9 @@ def test_numbered_overlay_ignores_invalid_and_keeps_shape():
              elemento_afetado="x", justificativa="j", impacto="i",
              severidade="Baixa", contramedida="c"),  # inválido: apenas ignorado
     ]
-    out = draw_numbered_overlay(_blank_png_bytes(), risks, graph)
+    # O overlay agora opera sobre GRUPOS (um #N por elemento), não riscos soltos.
+    groups = group_risks(risks)
+    out = draw_numbered_overlay(_blank_png_bytes(), groups, graph)
     assert out.shape == (1000, 1000, 3)
 
 

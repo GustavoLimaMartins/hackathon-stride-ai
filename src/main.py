@@ -38,13 +38,14 @@ from src.graph_builder import to_json
 from src.ocr_engine import assign_component_names, extract_text
 from src.prompts import STRIDE_ANALYST_SYSTEM_PROMPT, build_stride_user_message
 from src.stride_engine import load_analyst_structured
-from src.stride_models import severity_rank
+from src.stride_models import group_risks
 from src.vision import _load_image, detect
 from src.visual_report import (
     draw_numbered_overlay,
     draw_overlay,
-    highlight_risk,
+    highlight_element,
     legend_items,
+    resolve_graph_index,
 )
 
 # set_page_config deve ser a primeira chamada Streamlit do script.
@@ -75,6 +76,37 @@ def _proximity_lines(graph: dict) -> list:
         if src and tgt:
             lines.append((src, tgt))
     return lines
+
+
+def _element_location(group, graph: dict) -> str:
+    """Zona de confiança onde o elemento do grupo está — o 'onde intervir'.
+
+    Para uma zona (boundary), é o próprio nome/label dela. Para um componente ou
+    fluxo, é a trust_boundary que contém o(s) componente(s): procura em qual
+    boundary do grafo o id aparece aninhado. Retorna "Não associado a zona" quando
+    o componente é unassigned, ou "-" quando não há como determinar.
+    """
+    rep = group.representative
+    boundaries = graph.get("trust_boundaries", [])
+
+    if group.target_type == "boundary":
+        zone = resolve_graph_index(graph).get(rep.target_id)
+        return (zone.get("label") if zone else "") or rep.target_id
+
+    # component/flow: acha a zona que contém o id de referência.
+    ref_ids = [
+        i for i in (rep.target_id, rep.flow_source_id, rep.flow_target_id) if i
+    ]
+    for boundary in boundaries:
+        member_ids = {c["id"] for c in boundary.get("components", [])}
+        if any(rid in member_ids for rid in ref_ids):
+            return boundary.get("label") or boundary["id"]
+
+    # não está em nenhuma zona: só é "unassigned" se o id existe no grafo.
+    index = resolve_graph_index(graph)
+    if any(rid in index for rid in ref_ids):
+        return "Não associado a zona"
+    return "-"
 
 
 st.title("🛡️ STRIDE-AI — Análise de Ameaças em Diagramas de Arquitetura Cloud")
@@ -147,66 +179,58 @@ if uploaded_file is not None:
             with st.spinner("O modelo está analisando o diagrama (STRIDE)..."):
                 report = analyst.invoke(messages)
 
-            # Riscos ordenados por severidade (crítica primeiro); o Risk #N segue
-            # essa ordem — o mesmo número liga o card ao overlay global.
-            risks = sorted(report.risks, key=lambda r: severity_rank(r.severidade))
+            # Consolida os riscos por elemento arquitetural: um bloco por
+            # componente/fluxo/zona (não por ameaça), ordenado pela pior
+            # severidade. Reduz drasticamente a repetição de recortes idênticos.
+            groups = group_risks(report.risks)
 
             st.divider()
             st.subheader("📋 Parecer STRIDE")
 
-            if not risks:
+            if not groups:
                 st.info("Nenhum risco STRIDE foi identificado para este diagrama.")
             else:
-                # Visão de conjunto: todos os pontos de risco numerados sobre o
-                # diagrama, para localizar de relance onde há intervenção a fazer.
+                # Visão de conjunto: cada elemento com risco numerado sobre o
+                # diagrama (um #N por bloco), para localizar onde intervir.
                 uploaded_file.seek(0)
                 st.image(
-                    draw_numbered_overlay(uploaded_file, risks, graph),
-                    caption="Mapa de riscos — cada número marca o elemento do risco correspondente.",
+                    draw_numbered_overlay(uploaded_file, groups, graph),
+                    caption="Mapa de riscos — cada número marca o elemento do bloco correspondente.",
                     width="stretch",
                 )
 
-                # Um card por risco: recorte do ponto afetado + tabela STRIDE, os
-                # dois compartilhando o mesmo Risk #N (rastreabilidade visual).
-                for i, risk in enumerate(risks, start=1):
+                # Um bloco por elemento: imagem padronizada (600x400) + tabela
+                # STRIDE consolidada (uma linha por ameaça daquele elemento).
+                for n, group in enumerate(groups, start=1):
+                    rep = group.representative
                     st.divider()
-                    st.markdown(f"### Risk #{i} — {risk.stride_category} · {risk.severidade}")
+                    st.markdown(f"### #{n} — {rep.elemento_afetado} · {rep.severidade}")
+                    st.markdown(
+                        f"**Elemento:** {rep.elemento_afetado}  \n"
+                        f"**Localização:** {_element_location(group, graph)}"
+                    )
                     col_img, col_tab = st.columns([1, 2])
 
                     with col_img:
                         uploaded_file.seek(0)
-                        crop = highlight_risk(uploaded_file, risk, graph)
+                        crop = highlight_element(uploaded_file, group, graph)
                         if crop is not None:
-                            st.image(
-                                crop,
-                                caption=f"Risk #{i}: {risk.elemento_afetado}",
-                                width="stretch",
-                            )
+                            st.image(crop, caption=f"#{n}: {rep.elemento_afetado}")
                         else:
                             st.caption(
-                                f"Elemento afetado: {risk.elemento_afetado} "
+                                f"Elemento: {rep.elemento_afetado} "
                                 f"(sem localização visual disponível)."
                             )
 
                     with col_tab:
+                        # Tabela consolidada de 4 colunas: uma linha por ameaça
+                        # STRIDE do elemento (Elemento/Localização já no cabeçalho).
                         st.table(
                             {
-                                "Campo": [
-                                    "Categoria STRIDE",
-                                    "Elemento afetado",
-                                    "Justificativa",
-                                    "Impacto",
-                                    "Severidade",
-                                    "Contramedida",
-                                ],
-                                "Descrição": [
-                                    risk.stride_category,
-                                    risk.elemento_afetado,
-                                    risk.justificativa,
-                                    risk.impacto,
-                                    risk.severidade,
-                                    risk.contramedida,
-                                ],
+                                "Categoria STRIDE": [r.stride_category for r in group.risks],
+                                "Justificativa": [r.justificativa for r in group.risks],
+                                "Severidade": [r.severidade for r in group.risks],
+                                "Contramedida": [r.contramedida for r in group.risks],
                             }
                         )
 

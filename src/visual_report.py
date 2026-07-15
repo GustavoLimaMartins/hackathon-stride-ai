@@ -189,6 +189,12 @@ def legend_items(
 # ficarem legíveis na UI (mesmo racional de ocr_engine._upscale_if_small).
 _MIN_RISK_CROP_HEIGHT = 240
 
+# Canvas padrão dos recortes exibidos no relatório: todos os cards saem com estas
+# dimensões (3:2), para o relatório ficar alinhado e comparável entre riscos.
+_CARD_WIDTH = 600
+_CARD_HEIGHT = 400
+_CARD_PAD_COLOR = (255, 255, 255)  # padding branco ao redor do conteúdo
+
 
 def resolve_graph_index(graph: dict) -> dict[str, dict]:
     """Mapa id -> objeto do grafo, para localizar bboxes por id (cN, bN).
@@ -246,6 +252,39 @@ def crop_region(img: np.ndarray, bbox, margin_frac: float = 0.15) -> np.ndarray:
         scale = _MIN_RISK_CROP_HEIGHT / crop.shape[0]
         crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
     return crop
+
+
+def _letterbox(
+    crop: np.ndarray,
+    out_w: int = _CARD_WIDTH,
+    out_h: int = _CARD_HEIGHT,
+    pad_color: tuple[int, int, int] = _CARD_PAD_COLOR,
+) -> np.ndarray:
+    """Ajusta 'crop' a um canvas fixo out_w x out_h preservando a proporção.
+
+    Redimensiona pelo lado limitante (o recorte cabe inteiro, sem distorção) e
+    centraliza sobre um fundo de padding — o clássico 'letterbox'. Assim todos os
+    recortes do relatório saem com o MESMO tamanho, alinhados e comparáveis, sem
+    esticar o conteúdo. Retorna sempre um array out_h x out_w x 3.
+    """
+    h, w = crop.shape[:2]
+    if h == 0 or w == 0:
+        return np.full((out_h, out_w, 3), pad_color, dtype=np.uint8)
+
+    scale = min(out_w / w, out_h / h)
+    new_w, new_h = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+    resized = cv2.resize(crop, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    canvas = np.full((out_h, out_w, 3), pad_color, dtype=np.uint8)
+    x0 = (out_w - new_w) // 2
+    y0 = (out_h - new_h) // 2
+    canvas[y0 : y0 + new_h, x0 : x0 + new_w] = resized
+    return canvas
+
+
+def standardize(crop: np.ndarray) -> np.ndarray:
+    """Padroniza um recorte para o canvas fixo do card (via _letterbox)."""
+    return _letterbox(crop)
 
 
 def _envelope(*bboxes) -> list[float]:
@@ -312,6 +351,22 @@ def highlight_risk(
     return crop_region(img, comp["bbox"], margin_frac=0.25)
 
 
+def highlight_element(
+    image: str | Path | bytes | BytesIO, group, graph: dict
+) -> np.ndarray | None:
+    """Imagem PADRONIZADA (600x400) do elemento de um grupo de riscos.
+
+    Recebe um RiskGroup — todos os riscos que afetam o mesmo elemento — e produz
+    UMA imagem para o bloco consolidado: destaca/recorta o elemento (via
+    highlight_risk sobre o risco representativo do grupo) e ajusta ao canvas fixo
+    do card com _letterbox. Retorna None quando o elemento não pôde ser localizado.
+    """
+    crop = highlight_risk(image, group.representative, graph)
+    if crop is None:
+        return None
+    return standardize(crop)
+
+
 def _risk_anchor_bbox(risk, graph: dict, index: dict[str, dict]):
     """bbox onde ancorar o número (#N) de um risco no overlay global, ou None."""
     ttype = getattr(risk, "target_type", None)
@@ -328,19 +383,20 @@ def _risk_anchor_bbox(risk, graph: dict, index: dict[str, dict]):
 
 
 def draw_numbered_overlay(
-    image: str | Path | bytes | BytesIO, risks, graph: dict
+    image: str | Path | bytes | BytesIO, groups, graph: dict
 ) -> np.ndarray:
-    """Overlay global com o bbox de cada risco marcado pelo seu número (#N).
+    """Overlay global: o bbox de cada ELEMENTO (grupo) marcado pelo número #N.
 
-    Cada risco em 'risks' (na ordem já exibida na UI) é desenhado sobre a imagem
-    com a caixa do elemento afetado e o rótulo "#<posição>", dando a visão de
-    conjunto de onde estão todos os pontos que precisam de intervenção. Riscos
-    cujo alvo não existe no grafo são ignorados (não têm onde ancorar).
+    Cada grupo em 'groups' (na mesma ordem exibida no relatório) é desenhado sobre
+    a imagem com a caixa do elemento afetado e o rótulo "#<posição>", dando a visão
+    de conjunto de onde estão os pontos que precisam de intervenção. Como a unidade
+    é o elemento (não a ameaça), há um número por bloco do relatório — menos
+    marcações sobrepostas. Grupos cujo alvo não existe no grafo são ignorados.
     """
     img = np.array(_load_image(image).convert("RGB"))
     index = resolve_graph_index(graph)
-    for i, risk in enumerate(risks, start=1):
-        bbox = _risk_anchor_bbox(risk, graph, index)
+    for i, group in enumerate(groups, start=1):
+        bbox = _risk_anchor_bbox(group.representative, graph, index)
         if bbox is not None:
             _draw_box(img, bbox, _RISK_HIGHLIGHT_COLOR, f"#{i}", thickness=3)
     return img
