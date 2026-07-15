@@ -36,6 +36,13 @@ _DEFAULT_COLOR = (128, 128, 128)  # cinza, para classes fora do mapa (defensivo)
 # competir visualmente com as bboxes coloridas das classes.
 _PROXIMITY_COLOR = (150, 150, 150)
 
+# Cor do DESTAQUE de um risco (vermelho forte): a caixa do elemento afetado por
+# um risco recebe esta cor, sobressaindo às cores neutras de classe no recorte.
+_RISK_HIGHLIGHT_COLOR = (255, 0, 0)
+# Cor do contexto secundário num recorte de risco (ex.: origem/destino de um
+# fluxo, ou componentes internos de uma zona) — traço fino e discreto.
+_RISK_CONTEXT_COLOR = (90, 90, 90)
+
 
 def class_color(class_name: str) -> tuple[int, int, int]:
     """Cor RGB associada a uma classe (cinza se a classe for desconhecida)."""
@@ -172,3 +179,168 @@ def legend_items(
             r, g, b = class_color(cls)
             items.append((cls, f"#{r:02x}{g:02x}{b:02x}"))
     return items
+
+
+# ---------------------------------------------------------------------------
+# Rastreabilidade visual de riscos: recorte + destaque do elemento afetado.
+# ---------------------------------------------------------------------------
+
+# Altura mínima (px) de um recorte de risco; recortes menores são ampliados para
+# ficarem legíveis na UI (mesmo racional de ocr_engine._upscale_if_small).
+_MIN_RISK_CROP_HEIGHT = 240
+
+
+def resolve_graph_index(graph: dict) -> dict[str, dict]:
+    """Mapa id -> objeto do grafo, para localizar bboxes por id (cN, bN).
+
+    Varre zonas (bN), componentes aninhados e unassigned (cN), reunindo cada
+    objeto sob o seu id. É a base para localizar o alvo de um risco a partir do
+    target_id devolvido pelo LLM. Reúne o padrão de varredura antes espalhado
+    (ver main._proximity_lines), agora que UI e destaque de risco precisam dele.
+    """
+    index: dict[str, dict] = {}
+    for boundary in graph.get("trust_boundaries", []):
+        index[boundary["id"]] = boundary
+        for comp in boundary.get("components", []):
+            index[comp["id"]] = comp
+    for comp in graph.get("unassigned_components", []):
+        index[comp["id"]] = comp
+    return index
+
+
+def _find_data_flow(graph: dict, id_a: str | None, id_b: str | None) -> dict | None:
+    """Localiza o data_flow que liga o par {id_a, id_b} (não-ordenado)."""
+    if not id_a or not id_b:
+        return None
+    want = {id_a, id_b}
+    for flow in graph.get("data_flows", []):
+        if {flow["source"], flow["target"]} == want:
+            return flow
+    return None
+
+
+def _clamp_bbox(bbox, width: int, height: int) -> tuple[int, int, int, int]:
+    """bbox -> inteiros dentro dos limites da imagem (padrão de ocr_engine)."""
+    x1, y1, x2, y2 = (int(round(v)) for v in bbox)
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(width, x2), min(height, y2)
+    return x1, y1, x2, y2
+
+
+def crop_region(img: np.ndarray, bbox, margin_frac: float = 0.15) -> np.ndarray:
+    """Recorta a região de 'bbox' com uma margem ao redor, ampliando se pequena.
+
+    A margem (fração do lado do bbox) dá contexto ao redor do elemento. Os
+    limites são clampados à imagem; recortes baixos são ampliados para
+    _MIN_RISK_CROP_HEIGHT. Retorna um array RGB pronto para st.image.
+    """
+    height, width = img.shape[:2]
+    x1, y1, x2, y2 = (float(v) for v in bbox)
+    mx = (x2 - x1) * margin_frac
+    my = (y2 - y1) * margin_frac
+    cx1, cy1, cx2, cy2 = _clamp_bbox((x1 - mx, y1 - my, x2 + mx, y2 + my), width, height)
+    if cx2 <= cx1 or cy2 <= cy1:
+        return img  # bbox degenerado: devolve a imagem inteira (fallback seguro)
+    crop = img[cy1:cy2, cx1:cx2]
+    if crop.shape[0] < _MIN_RISK_CROP_HEIGHT:
+        scale = _MIN_RISK_CROP_HEIGHT / crop.shape[0]
+        crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    return crop
+
+
+def _envelope(*bboxes) -> list[float]:
+    """Menor retângulo que contém todos os bboxes dados."""
+    xs1 = [b[0] for b in bboxes]
+    ys1 = [b[1] for b in bboxes]
+    xs2 = [b[2] for b in bboxes]
+    ys2 = [b[3] for b in bboxes]
+    return [min(xs1), min(ys1), max(xs2), max(ys2)]
+
+
+def highlight_risk(
+    image: str | Path | bytes | BytesIO, risk, graph: dict
+) -> np.ndarray | None:
+    """Imagem contextual de um risco: destaca o elemento afetado e recorta a região.
+
+    'risk' é um objeto com os campos target_type ('component'|'flow'|'boundary'),
+    target_id e, para fluxos, flow_source_id/flow_target_id. Conforme o tipo:
+      - component: destaca a bbox do componente e recorta ao redor dele;
+      - flow: destaca a seta (arrow_bbox do data_flow) e as duas pontas como
+        contexto; recorta no envelope dos três;
+      - boundary: destaca a zona e seus componentes internos (contexto), recorta
+        na zona.
+    Retorna o recorte RGB, ou None se o target_id não existir no grafo (a UI
+    então mostra o card sem imagem — degradação elegante).
+    """
+    index = resolve_graph_index(graph)
+    img = np.array(_load_image(image).convert("RGB"))
+
+    ttype = getattr(risk, "target_type", None)
+
+    if ttype == "boundary":
+        zone = index.get(risk.target_id)
+        if zone is None:
+            return None
+        for comp in zone.get("components", []):  # contexto: filhos da zona
+            _draw_box(img, comp["bbox"], _RISK_CONTEXT_COLOR, "", thickness=2)
+        _draw_box(img, zone["bbox"], _RISK_HIGHLIGHT_COLOR, "", thickness=4)
+        return crop_region(img, zone["bbox"], margin_frac=0.05)
+
+    if ttype == "flow":
+        src = index.get(risk.flow_source_id)
+        tgt = index.get(risk.flow_target_id)
+        flow = _find_data_flow(graph, risk.flow_source_id, risk.flow_target_id)
+        boxes = [o["bbox"] for o in (src, tgt) if o is not None]
+        if flow is not None:
+            boxes.append(flow["arrow_bbox"])
+        if not boxes:
+            return None
+        # Contexto: origem e destino em traço fino.
+        for o in (src, tgt):
+            if o is not None:
+                _draw_box(img, o["bbox"], _RISK_CONTEXT_COLOR, "", thickness=2)
+        # Destaque: a seta, quando existe; senão, o envelope das pontas.
+        highlight_box = flow["arrow_bbox"] if flow is not None else _envelope(*boxes)
+        _draw_box(img, highlight_box, _RISK_HIGHLIGHT_COLOR, "", thickness=4)
+        return crop_region(img, _envelope(*boxes), margin_frac=0.2)
+
+    # component (default)
+    comp = index.get(risk.target_id)
+    if comp is None:
+        return None
+    _draw_box(img, comp["bbox"], _RISK_HIGHLIGHT_COLOR, "", thickness=4)
+    return crop_region(img, comp["bbox"], margin_frac=0.25)
+
+
+def _risk_anchor_bbox(risk, graph: dict, index: dict[str, dict]):
+    """bbox onde ancorar o número (#N) de um risco no overlay global, ou None."""
+    ttype = getattr(risk, "target_type", None)
+    if ttype == "flow":
+        flow = _find_data_flow(graph, risk.flow_source_id, risk.flow_target_id)
+        if flow is not None:
+            return flow["arrow_bbox"]
+        src = index.get(risk.flow_source_id)
+        tgt = index.get(risk.flow_target_id)
+        boxes = [o["bbox"] for o in (src, tgt) if o is not None]
+        return _envelope(*boxes) if boxes else None
+    obj = index.get(risk.target_id)
+    return obj["bbox"] if obj is not None else None
+
+
+def draw_numbered_overlay(
+    image: str | Path | bytes | BytesIO, risks, graph: dict
+) -> np.ndarray:
+    """Overlay global com o bbox de cada risco marcado pelo seu número (#N).
+
+    Cada risco em 'risks' (na ordem já exibida na UI) é desenhado sobre a imagem
+    com a caixa do elemento afetado e o rótulo "#<posição>", dando a visão de
+    conjunto de onde estão todos os pontos que precisam de intervenção. Riscos
+    cujo alvo não existe no grafo são ignorados (não têm onde ancorar).
+    """
+    img = np.array(_load_image(image).convert("RGB"))
+    index = resolve_graph_index(graph)
+    for i, risk in enumerate(risks, start=1):
+        bbox = _risk_anchor_bbox(risk, graph, index)
+        if bbox is not None:
+            _draw_box(img, bbox, _RISK_HIGHLIGHT_COLOR, f"#{i}", thickness=3)
+    return img

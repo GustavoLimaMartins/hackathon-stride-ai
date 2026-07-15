@@ -116,8 +116,10 @@ def connect_data_flows(components: list[dict]) -> list[dict]:
     origem de destino, então retornar um sentido seria adivinhar.
 
     Os nós são referenciados pelo índice posicional na lista 'components' recebida.
-    Retorna lista de {'components': [idx_a, idx_b], 'confidence': float}, uma por
-    seta que tenha ao menos 2 nós candidatos.
+    Retorna lista de {'components': [idx_a, idx_b], 'confidence': float,
+    'arrow_bbox': [x1, y1, x2, y2]}, uma por seta que tenha ao menos 2 nós
+    candidatos. 'arrow_bbox' é a bbox da própria seta — usada depois para destacar
+    visualmente o fluxo (o elemento que representa a comunicação no diagrama).
     """
     node_indices = [
         i for i, c in enumerate(components) if c["class"] in _CONNECTABLE_CLASSES
@@ -148,7 +150,11 @@ def connect_data_flows(components: list[dict]) -> list[dict]:
         idx_a, idx_b = distances[0][1], distances[1][1]
 
         connections.append(
-            {"components": [idx_a, idx_b], "confidence": arrow["confidence"]}
+            {
+                "components": [idx_a, idx_b],
+                "confidence": arrow["confidence"],
+                "arrow_bbox": [float(v) for v in arrow["bbox"]],
+            }
         )
 
     return connections
@@ -300,7 +306,7 @@ def to_json(
       {
         "trust_boundaries": [{"id", "label", "bbox", "components": [...]}],
         "unassigned_components": [...],
-        "data_flows": [{"source", "target", "confidence"}],
+        "data_flows": [{"source", "target", "confidence", "arrow_bbox"}],
         "proximity_hints": [{"source", "target", "distance_frac"}]
       }
 
@@ -328,6 +334,7 @@ def to_json(
             "source": comp_ids[conn["components"][0]],
             "target": comp_ids[conn["components"][1]],
             "confidence": float(conn["confidence"]),
+            "arrow_bbox": conn["arrow_bbox"],
         }
         for conn in connections
     ]

@@ -146,44 +146,52 @@ definitiva; ele é um indício secundário, não um fato.
 
 ## Formato de saída
 
-Responda **exclusivamente em Markdown válido e limpo** — sem texto solto \
-fora de cabeçalhos, tabelas ou listas, e sem cercas de código em volta do \
-documento inteiro.
+Sua resposta é um **objeto estruturado** (não texto livre): uma lista `risks`, \
+onde cada elemento é **um risco** — a combinação de UMA categoria STRIDE com UM \
+elemento do diagrama afetado. Um mesmo elemento pode gerar vários riscos (um por \
+categoria STRIDE aplicável); cada um é um item separado da lista.
 
-Organize o parecer por componente e por fluxo de dados. Para **cada** \
-componente (dentro de uma `trust_boundary` ou em `unassigned_components`) e \
-**cada** fluxo de dados analisado, produza:
+Para cada risco, preencha os campos:
 
-1. Um cabeçalho de nível 3 (`###`) identificando o item. Refira-se a cada \
-componente pelo seu `name` real quando não-vazio; quando `name` for vazio, use \
-o formato `<class> (<id>)`. Para fluxos, identifique as duas pontas pela mesma \
-regra (nome real, ou `<class> (<id>)` no fallback). Exemplos:
-   - `### Componente Amazon Lambda (compute, zona: AWS Cloud)`
-   - `### Componente compute (c4) (zona: AWS Cloud)`  ← quando name é vazio
-   - `### Fluxo Amazon API Gateway ↔ AWS Lambda (cruza fronteira b1 ↔ b0)`
-2. Logo abaixo do cabeçalho, uma **tabela Markdown** com exatamente estas três \
-colunas, uma linha por categoria STRIDE aplicável ao item:
+- `target_type`: o tipo do elemento afetado —
+   - `component` para um componente individual (actor, compute, \
+database_storage, api_gateway, network_security);
+   - `flow` para um fluxo de dados (comunicação entre dois componentes);
+   - `boundary` para uma zona de confiança inteira (risco de \
+segmentação/isolamento/perímetro).
+- `target_id`: o **id exato do elemento no JSON** —
+   - para `component`, o `id` do componente (ex.: `c4`);
+   - para `boundary`, o `id` da zona (ex.: `b1`);
+   - para `flow`, coloque aqui o id de UMA das pontas (ex.: `c2`) e preencha \
+também `flow_source_id` e `flow_target_id` com os ids `cN` das duas pontas do \
+fluxo. **Use sempre os ids reais que aparecem no JSON** — é por eles que o \
+elemento será localizado visualmente no diagrama.
+- `stride_category`: uma das seis (Spoofing, Tampering, Repudiation, \
+Information Disclosure, Denial of Service, Elevation of Privilege).
+- `elemento_afetado`: nome legível do alvo — o `name` real quando não-vazio \
+(ex.: "Amazon Lambda"); quando vazio, use `<classe> (<id>)` (ex.: \
+"compute (c4)"). Para fluxos, nomeie as duas pontas (ex.: "API Gateway ↔ \
+Lambda").
+- `justificativa`: o motivo técnico, **ancorado na estrutura do grafo** (zona \
+de confiança, conexões, ausência de zona, cruzamento de fronteira). Não \
+suponha nada fora do JSON. Ao citar outros componentes, use o `name` real \
+deles (ou `<classe> (<id>)`), nunca o id cru sozinho.
+- `impacto`: a consequência concreta caso a ameaça se realize.
+- `severidade`: uma de `Baixa`, `Média`, `Alta`, `Crítica`. Calibre pela \
+exposição: fluxos que cruzam fronteira de confiança e componentes em \
+`unassigned_components` tendem a `Alta`/`Crítica`.
+- `contramedida`: mitigação técnica **específica e prescritiva** — nunca \
+genérica ou vazia.
 
-   | Categoria STRIDE | Justificativa | Contramedida |
-   |---|---|---|
-   | Spoofing | ... | ... |
-
-Regras da tabela:
-- Cada linha associa **uma** ameaça a **uma** contramedida técnica \
-específica e prescritiva — nunca deixe a célula de Contramedida vazia ou \
-genérica.
-- A Justificativa deve se apoiar na estrutura do grafo (zona de confiança, \
-conexões, ausência de zona), não em suposições fora do JSON. Ao mencionar \
-outros componentes na justificativa (ex.: "comunica-se com ..."), use também \
-o `name` real deles (ou `<class> (<id>)` se sem nome) — nunca o id cru \
-sozinho como "c15".
-- Inclua apenas as categorias STRIDE que de fato se aplicam ao item; se \
-omitir alguma categoria relevante por não se aplicar, isso é aceitável, mas \
-não deixe um item sem nenhuma linha.
-- Para fluxos que cruzam uma fronteira de confiança, marque as categorias \
-priorizadas (Spoofing e Elevation of Privilege — ver "Atenção redobrada a \
-fronteiras cruzadas") com o sufixo **(prioritário)** na célula Categoria \
-STRIDE, e liste-as primeiro na tabela.
+Regras de cobertura:
+- Gere riscos para **cada** componente (em zona ou em \
+`unassigned_components`), **cada** fluxo de dados e **cada** zona com risco de \
+segmentação relevante. Inclua apenas as categorias STRIDE que de fato se \
+aplicam a cada elemento — não invente categorias sem cabimento, mas não deixe \
+um elemento relevante sem nenhum risco.
+- Para fluxos que cruzam uma fronteira de confiança, priorize (liste primeiro \
+e trate como severidade mais alta) **Spoofing** e **Elevation of Privilege** \
+— ver "Atenção redobrada a fronteiras cruzadas".
 """
 
 

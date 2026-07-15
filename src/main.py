@@ -37,9 +37,15 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from src.graph_builder import to_json
 from src.ocr_engine import assign_component_names, extract_text
 from src.prompts import STRIDE_ANALYST_SYSTEM_PROMPT, build_stride_user_message
-from src.stride_engine import load_llm
+from src.stride_engine import load_analyst_structured
+from src.stride_models import severity_rank
 from src.vision import _load_image, detect
-from src.visual_report import draw_overlay, legend_items
+from src.visual_report import (
+    draw_numbered_overlay,
+    draw_overlay,
+    highlight_risk,
+    legend_items,
+)
 
 # set_page_config deve ser a primeira chamada Streamlit do script.
 st.set_page_config(
@@ -129,45 +135,82 @@ if uploaded_file is not None:
                 image_size = _load_image(uploaded_file).size  # (width, height)
                 graph = to_json(trust_boundaries, components, image_size=image_size)
 
-            llm = load_llm("analyst")
+            # O 'analyst' (gpt-5) devolve o parecer como StrideReport estruturado:
+            # cada risco já traz o id do elemento afetado, o que permite ligar a
+            # ameaça ao seu ponto exato no diagrama. É um modelo de reasoning
+            # (pensa por dezenas de segundos), então cobrimos a espera com spinner.
+            analyst = load_analyst_structured()
             messages = [
                 SystemMessage(content=STRIDE_ANALYST_SYSTEM_PROMPT),
                 HumanMessage(content=build_stride_user_message(graph)),
             ]
-
-            # O 'analyst' (gpt-5) é um modelo de reasoning: ele "pensa" por dezenas
-            # de segundos antes de emitir o primeiro token. O spinner cobre essa
-            # espera inicial; assim que o primeiro pedaço de texto chega, cedemos
-            # lugar ao streaming token a token (que já é o indicador de progresso).
-            token_stream = llm.stream(messages)
-            chunks: list[str] = []
-
             with st.spinner("O modelo está analisando o diagrama (STRIDE)..."):
-                first_chunk = ""
-                for chunk in token_stream:
-                    if chunk.content:
-                        first_chunk = chunk.content
-                        chunks.append(first_chunk)
-                        break
+                report = analyst.invoke(messages)
+
+            # Riscos ordenados por severidade (crítica primeiro); o Risk #N segue
+            # essa ordem — o mesmo número liga o card ao overlay global.
+            risks = sorted(report.risks, key=lambda r: severity_rank(r.severidade))
 
             st.divider()
             st.subheader("📋 Parecer STRIDE")
 
-            def _stream_response():
-                # Reemite o primeiro chunk já consumido (fora do spinner) e segue
-                # com o restante do stream. Acumula em 'chunks' para ter a resposta
-                # completa garantida ao final, independente do retorno do widget.
-                if first_chunk:
-                    yield first_chunk
-                for chunk in token_stream:
-                    chunks.append(chunk.content)
-                    yield chunk.content
+            if not risks:
+                st.info("Nenhum risco STRIDE foi identificado para este diagrama.")
+            else:
+                # Visão de conjunto: todos os pontos de risco numerados sobre o
+                # diagrama, para localizar de relance onde há intervenção a fazer.
+                uploaded_file.seek(0)
+                st.image(
+                    draw_numbered_overlay(uploaded_file, risks, graph),
+                    caption="Mapa de riscos — cada número marca o elemento do risco correspondente.",
+                    width="stretch",
+                )
 
-            st.write_stream(_stream_response)
-            full_response = "".join(chunks)
+                # Um card por risco: recorte do ponto afetado + tabela STRIDE, os
+                # dois compartilhando o mesmo Risk #N (rastreabilidade visual).
+                for i, risk in enumerate(risks, start=1):
+                    st.divider()
+                    st.markdown(f"### Risk #{i} — {risk.stride_category} · {risk.severidade}")
+                    col_img, col_tab = st.columns([1, 2])
 
-            # Seção visual: as caixas detectadas plotadas sobre a imagem enviada,
-            # dando a visão espacial de "o que o modelo viu" ao lado do parecer.
+                    with col_img:
+                        uploaded_file.seek(0)
+                        crop = highlight_risk(uploaded_file, risk, graph)
+                        if crop is not None:
+                            st.image(
+                                crop,
+                                caption=f"Risk #{i}: {risk.elemento_afetado}",
+                                width="stretch",
+                            )
+                        else:
+                            st.caption(
+                                f"Elemento afetado: {risk.elemento_afetado} "
+                                f"(sem localização visual disponível)."
+                            )
+
+                    with col_tab:
+                        st.table(
+                            {
+                                "Campo": [
+                                    "Categoria STRIDE",
+                                    "Elemento afetado",
+                                    "Justificativa",
+                                    "Impacto",
+                                    "Severidade",
+                                    "Contramedida",
+                                ],
+                                "Descrição": [
+                                    risk.stride_category,
+                                    risk.elemento_afetado,
+                                    risk.justificativa,
+                                    risk.impacto,
+                                    risk.severidade,
+                                    risk.contramedida,
+                                ],
+                            }
+                        )
+
+            # Seção visual complementar: todas as detecções do YOLO (contexto).
             st.divider()
             st.subheader("🖼️ Componentes detectados")
             uploaded_file.seek(0)

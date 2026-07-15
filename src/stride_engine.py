@@ -8,8 +8,11 @@ final com as contramedidas.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from langchain_openai import ChatOpenAI
+
+from src.stride_models import StrideReport
 
 _MODELS = {
     "rewriter": "gpt-4o",
@@ -42,3 +45,14 @@ def load_llm(role: str) -> ChatOpenAI:
     llm = ChatOpenAI(model=_MODELS[role])
     _llm_cache[role] = llm
     return llm
+
+
+def load_analyst_structured() -> Any:
+    """Cliente 'analyst' que devolve um StrideReport tipado, não texto livre.
+
+    Envolve o LLM com with_structured_output(StrideReport): o schema Pydantic é
+    injetado na chamada e a resposta já vem como um StrideReport validado (lista
+    de riscos, cada um ancorado a um id do grafo). É o que sustenta a
+    rastreabilidade visual risco -> bounding box na UI.
+    """
+    return load_llm("analyst").with_structured_output(StrideReport)
