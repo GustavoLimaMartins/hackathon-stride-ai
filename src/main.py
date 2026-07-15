@@ -15,6 +15,8 @@ Execução:
 """
 
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -34,8 +36,18 @@ load_dotenv(_PROJECT_ROOT / ".env")
 import streamlit as st
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from src import branding, theme
 from src.graph_builder import to_json
 from src.ocr_engine import assign_component_names, extract_text
+from src.pdf_report import build_pdf_report
+from src.progress import (
+    STEP_KEYS,
+    STEP_LABELS,
+    StepEstimator,
+    format_elapsed,
+    load_timings,
+    save_timing,
+)
 from src.prompts import STRIDE_ANALYST_SYSTEM_PROMPT, build_stride_user_message
 from src.stride_engine import load_analyst_structured
 from src.stride_models import group_risks
@@ -54,6 +66,12 @@ st.set_page_config(
     page_icon="🛡️",
     layout="wide",
 )
+
+# Aplica a identidade visual da marca (CSS + fontes) logo após o page_config —
+# recolore os widgets nativos e habilita as classes de hero/rodapé/pill usadas
+# adiante. Ver src/branding.py.
+branding.inject_brand_css()
+
 
 def _proximity_lines(graph: dict) -> list:
     """Traduz os proximity_hints do grafo em pares de centróides para o overlay.
@@ -109,7 +127,72 @@ def _element_location(group, graph: dict) -> str:
     return "-"
 
 
-st.title("🛡️ STRIDE-AI — Análise de Ameaças em Diagramas de Arquitetura Cloud")
+def _rewound(stream):
+    """Rebobina o UploadedFile (seek 0) e o devolve — pronto para nova leitura.
+
+    O stream do upload é consumido a cada leitura; o PDF chama highlight_element
+    uma vez por grupo, então cada chamada precisa rebobinar antes de abrir a
+    imagem de novo (mesmo cuidado dos _detect/_ocr_* do pipeline).
+    """
+    stream.seek(0)
+    return stream
+
+
+def _risk_table_html(group) -> str:
+    """Tabela HTML dos riscos de um grupo, com pill de severidade por linha.
+
+    st.table não estiliza por linha, então montamos uma tabela HTML embrulhada em
+    <div class="risk-table"> — o estilo (th uppercase, bordas, cores) vem do CSS
+    injetado por branding.inject_brand_css, então aqui não há estilo inline. A
+    coluna Severidade usa a pill arredondada com dot do guia
+    (branding.severity_pill_html), comunicando a gravidade antes da leitura. As 4
+    colunas são as da consolidação (Categoria/Justificativa/Severidade/
+    Contramedida).
+    """
+    head = (
+        "<tr><th>Categoria STRIDE</th><th>Justificativa</th>"
+        "<th>Severidade</th><th>Contramedida</th></tr>"
+    )
+    rows = []
+    for r in group.risks:
+        rows.append(
+            "<tr>"
+            f"<td>{r.stride_category}</td>"
+            f"<td>{r.justificativa}</td>"
+            f"<td>{branding.severity_pill_html(r.severidade)}</td>"
+            f"<td>{r.contramedida}</td>"
+            "</tr>"
+        )
+    return f"<div class='risk-table'><table>{head}{''.join(rows)}</table></div>"
+
+
+def _render_log(placeholder, done_steps: list[str]) -> None:
+    """Renderiza o log acumulado de etapas concluídas no placeholder."""
+    if done_steps:
+        placeholder.markdown("\n".join(f"✓ {label}" for label in done_steps))
+
+
+def _run_step(bar, log_ph, done: list[str], estimator: StepEstimator, step: str, fn):
+    """Executa uma etapa rápida (inline), medindo o tempo e atualizando a barra.
+
+    Mostra a etapa em andamento (fração inicial da fatia), roda fn(), mede a
+    duração para calibrar o ETA (save_timing), avança a barra até o fim da fatia
+    da etapa e registra "✓ concluída" no log. Retorna o valor de fn().
+    """
+    label = STEP_LABELS[step]
+    number = STEP_KEYS.index(step) + 1
+    bar.progress(estimator.step_start(step), text=f"{number}. {label}…")
+    t0 = time.monotonic()
+    result = fn()
+    elapsed = time.monotonic() - t0
+    save_timing(step, elapsed)
+    bar.progress(estimator.step_end(step), text=f"{number}. {label}…")
+    done.append(f"{number}. {label}")
+    _render_log(log_ph, done)
+    return result
+
+
+branding.render_hero()
 
 st.markdown(
     """
@@ -142,42 +225,83 @@ if uploaded_file is not None:
 
     if st.button("🔍 Analisar diagrama", type="primary"):
         try:
+            # Barra de progresso com ETA inferido dos tempos médios de cada etapa
+            # (ver src/progress.py). Dá feedback contínuo mesmo na longa etapa do
+            # LLM, onde uma barra ingênua congelaria.
+            estimator = StepEstimator(load_timings())
+            bar = st.progress(0.0, text="Iniciando análise…")
+            log_ph = st.empty()
+            done: list[str] = []
+
             # O UploadedFile é um stream: cada função abaixo lê seu conteúdo, então
             # é preciso rebobinar (seek(0)) antes de cada leitura para a segunda
             # chamada não receber um stream já consumido.
-            with st.spinner("Detectando componentes do diagrama (YOLO)..."):
+            def _detect():
                 uploaded_file.seek(0)
-                trust_boundaries, components = detect(uploaded_file)
+                return detect(uploaded_file)
 
-            with st.spinner("Lendo rótulos das zonas de confiança (OCR)..."):
+            trust_boundaries, components = _run_step(
+                bar, log_ph, done, estimator, "detect", _detect
+            )
+
+            def _ocr_zones():
                 uploaded_file.seek(0)
-                trust_boundaries = extract_text(uploaded_file, trust_boundaries)
+                return extract_text(uploaded_file, trust_boundaries)
 
-            with st.spinner("Associando rótulos aos componentes (OCR)..."):
+            trust_boundaries = _run_step(
+                bar, log_ph, done, estimator, "ocr_zones", _ocr_zones
+            )
+
+            def _ocr_components():
                 uploaded_file.seek(0)
-                components = assign_component_names(
-                    uploaded_file, components, trust_boundaries
-                )
+                return assign_component_names(uploaded_file, components, trust_boundaries)
 
-            with st.spinner("Montando o grafo hierárquico (LangGraph + LLM)..."):
+            components = _run_step(
+                bar, log_ph, done, estimator, "ocr_components", _ocr_components
+            )
+
+            def _graph():
                 # Dimensões da imagem alimentam o teto de distância dos
                 # proximity_hints (normalizado pela diagonal). Reaproveita
                 # _load_image para abrir exatamente a mesma imagem do pipeline.
                 uploaded_file.seek(0)
                 image_size = _load_image(uploaded_file).size  # (width, height)
-                graph = to_json(trust_boundaries, components, image_size=image_size)
+                return to_json(trust_boundaries, components, image_size=image_size)
+
+            graph = _run_step(bar, log_ph, done, estimator, "graph", _graph)
 
             # O 'analyst' (gpt-5) devolve o parecer como StrideReport estruturado:
             # cada risco já traz o id do elemento afetado, o que permite ligar a
-            # ameaça ao seu ponto exato no diagrama. É um modelo de reasoning
-            # (pensa por dezenas de segundos), então cobrimos a espera com spinner.
+            # ameaça ao seu ponto exato no diagrama. É um modelo de reasoning que
+            # leva minutos — chamada BLOQUEANTE. Para a barra não congelar, roda
+            # numa thread e animamos o progresso contra o ETA enquanto esperamos.
             analyst = load_analyst_structured()
             messages = [
                 SystemMessage(content=STRIDE_ANALYST_SYSTEM_PROMPT),
                 HumanMessage(content=build_stride_user_message(graph)),
             ]
-            with st.spinner("O modelo está analisando o diagrama (STRIDE)..."):
-                report = analyst.invoke(messages)
+            llm_label = STEP_LABELS["llm"]
+            llm_number = STEP_KEYS.index("llm") + 1
+            t0 = time.monotonic()
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(analyst.invoke, messages)
+                while not future.done():
+                    elapsed = time.monotonic() - t0
+                    # Cronômetro + percentual estimado (elapsed / tempo médio do
+                    # LLM) dão "sinal de vida" durante a espera longa; ficam só na
+                    # barra, não no log de etapas.
+                    percent = estimator.step_percent("llm", elapsed)
+                    bar.progress(
+                        estimator.fraction("llm", elapsed),
+                        text=f"{llm_number}. {llm_label}… {percent}% ({format_elapsed(elapsed)})",
+                    )
+                    time.sleep(0.2)
+                report = future.result()  # propaga exceção da thread ao except
+
+            save_timing("llm", time.monotonic() - t0)
+            bar.progress(1.0, text="Concluído")
+            done.append(f"{llm_number}. {llm_label}")
+            _render_log(log_ph, done)
 
             # Consolida os riscos por elemento arquitetural: um bloco por
             # componente/fluxo/zona (não por ameaça), ordenado pela pior
@@ -190,49 +314,76 @@ if uploaded_file is not None:
             if not groups:
                 st.info("Nenhum risco STRIDE foi identificado para este diagrama.")
             else:
+                # Overlay numerado reusado tanto na tela quanto no PDF.
+                uploaded_file.seek(0)
+                numbered_overlay = draw_numbered_overlay(uploaded_file, groups, graph)
+
+                # Exportação em PDF: gerado a partir dos MESMOS dados já
+                # calculados (groups/graph/overlay), reaproveitando _element_location
+                # e highlight_element via funções injetadas. Botão logo no topo do
+                # parecer, para baixar sem rolar a página inteira.
+                pdf_bytes = build_pdf_report(
+                    diagram_name=uploaded_file.name,
+                    groups=groups,
+                    graph=graph,
+                    numbered_overlay=numbered_overlay,
+                    element_location_fn=_element_location,
+                    card_image_fn=lambda g, gr: highlight_element(
+                        _rewound(uploaded_file), g, gr
+                    ),
+                )
+                st.download_button(
+                    "⬇️ Baixar relatório em PDF",
+                    data=pdf_bytes,
+                    file_name=f"stride_report_{uploaded_file.name.rsplit('.', 1)[0]}.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                )
+
                 # Visão de conjunto: cada elemento com risco numerado sobre o
                 # diagrama (um #N por bloco), para localizar onde intervir.
-                uploaded_file.seek(0)
                 st.image(
-                    draw_numbered_overlay(uploaded_file, groups, graph),
+                    numbered_overlay,
                     caption="Mapa de riscos — cada número marca o elemento do bloco correspondente.",
                     width="stretch",
                 )
 
                 # Um bloco por elemento: imagem padronizada (600x400) + tabela
-                # STRIDE consolidada (uma linha por ameaça daquele elemento).
+                # STRIDE consolidada (uma linha por ameaça daquele elemento). Cada
+                # bloco vive num st.container(border=True), estilizado como card
+                # (navy) pelo CSS da marca — dispensa o st.divider entre blocos.
                 for n, group in enumerate(groups, start=1):
                     rep = group.representative
-                    st.divider()
-                    st.markdown(f"### #{n} — {rep.elemento_afetado} · {rep.severidade}")
-                    st.markdown(
-                        f"**Elemento:** {rep.elemento_afetado}  \n"
-                        f"**Localização:** {_element_location(group, graph)}"
-                    )
-                    col_img, col_tab = st.columns([1, 2])
-
-                    with col_img:
-                        uploaded_file.seek(0)
-                        crop = highlight_element(uploaded_file, group, graph)
-                        if crop is not None:
-                            st.image(crop, caption=f"#{n}: {rep.elemento_afetado}")
-                        else:
-                            st.caption(
-                                f"Elemento: {rep.elemento_afetado} "
-                                f"(sem localização visual disponível)."
-                            )
-
-                    with col_tab:
-                        # Tabela consolidada de 4 colunas: uma linha por ameaça
-                        # STRIDE do elemento (Elemento/Localização já no cabeçalho).
-                        st.table(
-                            {
-                                "Categoria STRIDE": [r.stride_category for r in group.risks],
-                                "Justificativa": [r.justificativa for r in group.risks],
-                                "Severidade": [r.severidade for r in group.risks],
-                                "Contramedida": [r.contramedida for r in group.risks],
-                            }
+                    with st.container(border=True):
+                        # Cabeçalho com um marcador na cor da pior severidade do
+                        # bloco, para a hierarquia por gravidade ler de relance.
+                        sev_color = theme.severity_color(rep.severidade)
+                        st.markdown(
+                            f"### <span style='color:{sev_color}'>■</span> "
+                            f"#{n} — {rep.elemento_afetado} · {rep.severidade}",
+                            unsafe_allow_html=True,
                         )
+                        st.markdown(
+                            f"**Elemento:** {rep.elemento_afetado}  \n"
+                            f"**Localização:** {_element_location(group, graph)}"
+                        )
+                        col_img, col_tab = st.columns([1, 2])
+
+                        with col_img:
+                            uploaded_file.seek(0)
+                            crop = highlight_element(uploaded_file, group, graph)
+                            if crop is not None:
+                                st.image(crop, caption=f"#{n}: {rep.elemento_afetado}")
+                            else:
+                                st.caption(
+                                    f"Elemento: {rep.elemento_afetado} "
+                                    f"(sem localização visual disponível)."
+                                )
+
+                        with col_tab:
+                            # Tabela consolidada de 4 colunas: uma linha por ameaça
+                            # STRIDE do elemento, severidade como pill colorida.
+                            st.markdown(_risk_table_html(group), unsafe_allow_html=True)
 
             # Seção visual complementar: todas as detecções do YOLO (contexto).
             st.divider()
@@ -270,3 +421,6 @@ if uploaded_file is not None:
             st.json(graph)
 else:
     st.info("Envie uma imagem de diagrama de arquitetura para começar a análise.")
+
+# Rodapé de marca no lugar do 'Made with Streamlit' oculto — selo + slogan.
+branding.render_footer()

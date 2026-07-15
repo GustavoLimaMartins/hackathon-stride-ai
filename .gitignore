@@ -25,6 +25,9 @@ __pycache__/
 # Artefatos do EasyOCR (modelos baixados em cache) e uploads temporários
 *.tmp
 
+# Calibração local dos tempos de cada etapa (barra de progresso) — não versionar
+.stride_timings.json
+
 # IDE / SO
 .vscode/
 .idea/

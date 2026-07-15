@@ -16,6 +16,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from src import theme
 from src.vision import _load_image
 
 # Cor (R, G, B) por classe. A imagem é tratada em RGB (mesmo espaço que o
@@ -36,9 +37,10 @@ _DEFAULT_COLOR = (128, 128, 128)  # cinza, para classes fora do mapa (defensivo)
 # competir visualmente com as bboxes coloridas das classes.
 _PROXIMITY_COLOR = (150, 150, 150)
 
-# Cor do DESTAQUE de um risco (vermelho forte): a caixa do elemento afetado por
-# um risco recebe esta cor, sobressaindo às cores neutras de classe no recorte.
-_RISK_HIGHLIGHT_COLOR = (255, 0, 0)
+# Cor do DESTAQUE de um risco: a caixa do elemento afetado por um risco recebe
+# esta cor, sobressaindo às cores neutras de classe no recorte. Usa o magenta de
+# marca (theme.MAGENTA), alinhando o destaque à identidade visual do produto.
+_RISK_HIGHLIGHT_COLOR = theme.hex_to_rgb(theme.MAGENTA)
 # Cor do contexto secundário num recorte de risco (ex.: origem/destino de um
 # fluxo, ou componentes internos de uma zona) — traço fino e discreto.
 _RISK_CONTEXT_COLOR = (90, 90, 90)

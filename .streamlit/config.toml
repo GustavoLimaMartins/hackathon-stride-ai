@@ -1,0 +1,17 @@
+# Tema da aplicação — identidade visual "FIAP Software Security".
+# Os valores espelham os tokens de marca em src/theme.py (preto/magenta/navy).
+# O Streamlit lê este arquivo automaticamente ao subir; não há código Python
+# envolvido. @font-face customizado não é suportado, então a tipografia usa a
+# família de sistema sans-serif (equivalente ao corpo Roboto do guia).
+[theme]
+base = "dark"
+primaryColor = "#EC0868"           # magenta — marca, botões, destaques
+backgroundColor = "#050507"        # ink — fundo principal
+secondaryBackgroundColor = "#12183A"  # navy — cards, sidebar
+textColor = "#F7F5F3"              # text-hi
+font = "sans serif"
+
+[client]
+# Oculta o toolbar/deploy do topo de forma version-stable (complementa o
+# #MainMenu/footer escondidos via CSS em src/branding.py).
+toolbarMode = "minimal"
