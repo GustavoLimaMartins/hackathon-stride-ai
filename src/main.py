@@ -38,7 +38,7 @@ from src.graph_builder import to_json
 from src.ocr_engine import assign_component_names, extract_text
 from src.prompts import STRIDE_ANALYST_SYSTEM_PROMPT, build_stride_user_message
 from src.stride_engine import load_llm
-from src.vision import detect
+from src.vision import _load_image, detect
 from src.visual_report import draw_overlay, legend_items
 
 # set_page_config deve ser a primeira chamada Streamlit do script.
@@ -47,6 +47,29 @@ st.set_page_config(
     page_icon="🛡️",
     layout="wide",
 )
+
+def _proximity_lines(graph: dict) -> list:
+    """Traduz os proximity_hints do grafo em pares de centróides para o overlay.
+
+    Os hints referenciam componentes por id ("c0", "c1"...); aqui mapeamos cada
+    id para o centróide da sua bbox (varrendo componentes aninhados nas zonas e
+    os unassigned) e devolvemos os pares de pontos que draw_overlay liga com a
+    linha tracejada. Assim visual_report não precisa conhecer o esquema de ids.
+    """
+    centroids: dict = {}
+    boundaries = graph.get("trust_boundaries", [])
+    nested = (c for b in boundaries for c in b.get("components", []))
+    for comp in (*nested, *graph.get("unassigned_components", [])):
+        x1, y1, x2, y2 = comp["bbox"]
+        centroids[comp["id"]] = ((x1 + x2) / 2, (y1 + y2) / 2)
+
+    lines = []
+    for hint in graph.get("proximity_hints", []):
+        src, tgt = centroids.get(hint["source"]), centroids.get(hint["target"])
+        if src and tgt:
+            lines.append((src, tgt))
+    return lines
+
 
 st.title("🛡️ STRIDE-AI — Análise de Ameaças em Diagramas de Arquitetura Cloud")
 
@@ -99,7 +122,12 @@ if uploaded_file is not None:
                 )
 
             with st.spinner("Montando o grafo hierárquico (LangGraph + LLM)..."):
-                graph = to_json(trust_boundaries, components)
+                # Dimensões da imagem alimentam o teto de distância dos
+                # proximity_hints (normalizado pela diagonal). Reaproveita
+                # _load_image para abrir exatamente a mesma imagem do pipeline.
+                uploaded_file.seek(0)
+                image_size = _load_image(uploaded_file).size  # (width, height)
+                graph = to_json(trust_boundaries, components, image_size=image_size)
 
             llm = load_llm("analyst")
             messages = [
@@ -143,7 +171,12 @@ if uploaded_file is not None:
             st.divider()
             st.subheader("🖼️ Componentes detectados")
             uploaded_file.seek(0)
-            overlay = draw_overlay(uploaded_file, trust_boundaries, components)
+            overlay = draw_overlay(
+                uploaded_file,
+                trust_boundaries,
+                components,
+                proximity_lines=_proximity_lines(graph),
+            )
             st.image(
                 overlay,
                 caption="Detecções do modelo de visão computacional (YOLO).",

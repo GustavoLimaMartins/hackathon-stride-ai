@@ -54,6 +54,20 @@ entre as duas pontas, mas não indica qual lado é de fato a origem e qual é o 
 destino do fluxo real de dados. Nunca presuma uma direção a partir da ordem \
 desses campos — avalie ambos os sentidos possíveis ao aplicar STRIDE sobre \
 um fluxo.
+- `proximity_hints`: lista de pares de componentes cada um \
+`{"source": id, "target": id, "distance_frac": float}`. É um sinal **FRACO e \
+complementar**, de natureza diferente de `data_flows`: indica apenas que os \
+dois componentes estão **fisicamente próximos dentro da mesma zona de \
+confiança** no diagrama — e que o modelo de visão **não** detectou uma seta \
+(`data_flow`) explícita entre eles. Proximidade **não é** comunicação \
+confirmada: trate cada hint como uma **hipótese** de que pode existir \
+comunicação ou dependência entre os dois (por exemplo, uma seta que o modelo \
+não capturou), nunca com o mesmo peso de um `data_flow`. `distance_frac` é a \
+distância entre os componentes como fração da diagonal da imagem — valores \
+menores indicam componentes mais próximos e, portanto, um indício um pouco \
+mais forte. Também é **não-direcionado**. Um par só aparece aqui quando \
+**não** existe um `data_flow` correspondente (os dois sinais não se \
+sobrepõem).
 - Cada componente tem `class`, uma das categorias detectadas pelo modelo de \
 visão: `actor`, `api_gateway`, `compute`, `database_storage` ou \
 `network_security`.
@@ -120,6 +134,15 @@ fluxo cruza uma fronteira de confiança, aplique a priorização descrita em \
 of Privilege).
 3. Dê atenção especial a componentes em `unassigned_components`, explicando \
 o risco estrutural de não estarem associados a nenhuma zona de confiança.
+4. Você **pode** usar `proximity_hints` para levantar ameaças sobre uma \
+comunicação ou dependência **provável** entre dois componentes próximos que \
+não têm um `data_flow` explícito — isso ajuda a cobrir relações que o modelo \
+de visão possa ter perdido. Mas, sempre que apoiar uma análise num \
+`proximity_hint`, **deixe explícito na justificativa que a relação é inferida \
+por proximidade e não confirmada pelo diagrama** (ex.: "com base na \
+proximidade — relação provável, não confirmada — ..."). Nunca trate um \
+`proximity_hint` como um fluxo de dados confirmado nem como topologia \
+definitiva; ele é um indício secundário, não um fato.
 
 ## Formato de saída
 
