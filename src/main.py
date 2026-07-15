@@ -196,9 +196,6 @@ branding.render_hero()
 
 st.markdown(
     """
-    Envie um **diagrama de arquitetura cloud** (AWS, Azure ou GCP) e receba uma
-    análise de segurança automatizada pela metodologia **STRIDE**.
-
     Nos bastidores, a ferramenta combina três etapas: **visão computacional**
     (YOLO) para detectar os componentes do diagrama, **OCR** para ler os rótulos
     das zonas de confiança e um **LLM especialista** que atua como arquiteto
@@ -208,10 +205,8 @@ st.markdown(
     """
 )
 
-st.divider()
-
 uploaded_file = st.file_uploader(
-    "Envie um diagrama de arquitetura (Azure, AWS ou GCP) para análise STRIDE:",
+    "Diagrama de arquitetura",
     type=["png", "jpg", "jpeg"],
     help="Formatos aceitos: PNG, JPG, JPEG.",
 )
@@ -420,7 +415,10 @@ if uploaded_file is not None:
         with st.expander("Ver JSON do grafo (dados intermediários)"):
             st.json(graph)
 else:
-    st.info("Envie uma imagem de diagrama de arquitetura para começar a análise.")
+    st.info(
+        "Envie um diagrama de arquitetura cloud (AWS, Azure ou GCP) e receba uma "
+        "análise de segurança automatizada pela metodologia STRIDE."
+    )
 
 # Rodapé de marca no lugar do 'Made with Streamlit' oculto — selo + slogan.
 branding.render_footer()

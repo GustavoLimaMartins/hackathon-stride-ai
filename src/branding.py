@@ -33,7 +33,10 @@ _SEVERITY_PILL_CLASS: dict[str, str] = {
 
 # Slogan de assinatura e selo combinado (seções 1 e 2 do guia).
 _SLOGAN = "Todo diagrama esconde um ponto de falha. Nós o desenhamos de volta."
-_COMBINED_MARK = "STRIDE-AI <span class='by'>by</span> FIAP Software Security"
+_COMBINED_MARK = (
+    "<span class='product'>STRIDE-AI</span> <span class='by'>by</span> "
+    "<span class='company'>FIAP Software Security</span>"
+)
 
 # Bloco de CSS único: @import de fontes, token system do guia, ocultar chrome
 # default e reskin dos widgets nativos. Injetado uma vez, no topo do main.py.
@@ -180,13 +183,13 @@ footer { visibility: hidden; }
   margin-bottom: 8px;
 }
 .brand-eyebrow {
-  font-family: var(--font-body);
-  font-size: 0.72rem;
-  font-weight: 500;
-  letter-spacing: 0.12em;
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--text-low);
-  margin-bottom: 6px;
+  color: var(--magenta-1);
+  margin-bottom: 10px;
 }
 .brand-mark {
   font-family: var(--font-display);
@@ -197,10 +200,10 @@ footer { visibility: hidden; }
 }
 .brand-mark .brand-mark-accent { color: var(--magenta-1); }
 .brand-tagline {
-  margin: 14px 0 0;
-  font-size: 1.05rem;
-  font-weight: 300;
-  color: var(--text-mid);
+  margin: 18px 0 0;
+  font-size: 1.35rem;
+  font-weight: 400;
+  color: var(--text-hi);
   max-width: 62ch;
 }
 
@@ -216,15 +219,35 @@ footer { visibility: hidden; }
   font-weight: 500;
   font-size: 1.15rem;
   color: var(--text-mid);
-  margin-bottom: 12px;
-  max-width: 52ch;
+  margin-bottom: 16px;
+  max-width: 68ch;
+  text-wrap: balance;
 }
 .brand-footer .slogan .hl { color: var(--magenta-1); }
 .brand-footer .mark {
-  font-size: 0.82rem;
-  letter-spacing: 0.02em;
+  font-family: var(--font-display);
+  letter-spacing: 0.01em;
+  color: var(--text-hi);
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
 }
-.brand-footer .mark .by { color: var(--text-low); font-weight: 300; }
+.brand-footer .mark .product {
+  font-weight: 500;
+  font-size: 0.95rem;
+  color: var(--text-mid);
+}
+.brand-footer .mark .by {
+  color: var(--text-low);
+  font-weight: 300;
+  font-size: 0.85rem;
+}
+.brand-footer .mark .company {
+  font-weight: 700;
+  font-size: 1.5rem;
+  color: var(--text-hi);
+}
 </style>
 """
 
