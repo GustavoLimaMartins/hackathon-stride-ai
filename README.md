@@ -66,11 +66,28 @@ flowchart TD
     O1 --> G["4 · Engenharia espacial<br/><code>graph_builder.to_json</code><br/>contenção geométrica + data_flows + proximity_hints"]
     O2 --> G
 
-    G -->|"grafo JSON hierárquico"| R["5 · Enriquecimento — GPT-4o / Ollama<br/><code>stride_engine.load_primary_rewriter</code><br/>resumo do padrão arquitetural (não crítico)"]
+    subgraph LLM["Motor de LLM — <code>stride_engine</code> · provedor por papel via <code>LLM_MODEL_PAID</code>"]
+      direction TB
+      R["5 · Enriquecimento — <code>rewriter</code><br/><code>load_primary_rewriter</code><br/>gpt-4o (pago) ou Ollama (local)"]
+      RF(["🦙 fallback local (Ollama)<br/>no timeout do gpt-4o"])
+      L["6 · Análise STRIDE — <code>analyst</code><br/><code>load_primary_analyst</code><br/>gpt-5 (pago) ou Ollama (local)"]
+      LF(["🦙 fallback local (Ollama)<br/>no timeout do gpt-5"])
 
-    R -->|"grafo + narrative_summary"| L["6 · LLM analyst — GPT-5 via LangChain<br/><code>stride_engine.load_primary_analyst</code><br/>with_structured_output(StrideReport)"]
+      R -->|"timeout"| RF
+      RF -->|"grafo enriquecido (ou original, se falhar)"| L
+      R -->|"grafo + narrative_summary"| L
+      L -->|"timeout"| LF
+    end
 
-    L --> C["Consolidação por elemento<br/><code>stride_models.group_risks</code><br/>1 bloco por componente/fluxo/zona"]
+    G -->|"grafo JSON hierárquico"| R
+
+    L -->|"StrideReport"| C["Consolidação por elemento<br/><code>stride_models.group_risks</code><br/>1 bloco por componente/fluxo/zona"]
+    LF -->|"StrideReport (via fallback)"| C
+
+    R -.->|"registra chamada"| AUD["🧾 Trilha de auditoria<br/><code>llm_audit</code> → <code>logs/llm_audit.jsonl</code><br/>provedor · modelo · duração · status"]
+    L -.-> AUD
+    RF -.-> AUD
+    LF -.-> AUD
 
     C --> UI["🖥️ Relatório na tela — Streamlit<br/>overlay numerado + cards + tabelas STRIDE"]
     C --> PDF["📄 Exportação PDF — ReportLab<br/><code>src/pdf_report.py</code>"]
@@ -78,6 +95,9 @@ flowchart TD
     style U fill:#12183A,stroke:#EC0868,color:#F7F5F3
     style R fill:#12183A,stroke:#EC0868,color:#F7F5F3
     style L fill:#12183A,stroke:#EC0868,color:#F7F5F3
+    style RF fill:#0B1020,stroke:#7A5CFF,color:#F7F5F3
+    style LF fill:#0B1020,stroke:#7A5CFF,color:#F7F5F3
+    style AUD fill:#0B1020,stroke:#7A5CFF,color:#F7F5F3
     style UI fill:#EC0868,stroke:#EC0868,color:#F7F5F3
     style PDF fill:#EC0868,stroke:#EC0868,color:#F7F5F3
 ```
@@ -109,6 +129,7 @@ O resultado é um **JSON hierárquico**: zonas nomeadas com seus componentes ani
 - [src/pdf_report.py](src/pdf_report.py) — gera o PDF com **ReportLab** a partir dos mesmos dados da tela (sem recálculo), em tema claro/editorial.
 - [src/branding.py](src/branding.py) + [src/theme.py](src/theme.py) + [.streamlit/config.toml](.streamlit/config.toml) — identidade visual da marca (ver [Tecnologias](#-tecnologias-embarcadas)).
 - [src/progress.py](src/progress.py) — barra de progresso com ETA: cada etapa ocupa uma fatia proporcional ao seu tempo médio histórico, persistido em `.stride_timings.json` (média móvel calibrada ao hardware do usuário).
+- [src/llm_audit.py](src/llm_audit.py) — **trilha de auditoria** de cada chamada de LLM (rewriter/analyst, OpenAI ou Ollama): grava uma linha JSON em `logs/llm_audit.jsonl` com provedor, modelo, se foi fallback, duração, status e tamanho (tokens ou nº de riscos). Módulo puro, sem Streamlit.
 
 ---
 
@@ -116,7 +137,7 @@ O resultado é um **JSON hierárquico**: zonas nomeadas com seus componentes ani
 
 ```
 hackathon-stride-ai/
-├── .env.example              # Template de credenciais (OPENAI_API_KEY)
+├── .env.example              # Template de config (OPENAI_API_KEY, LLM_MODEL_PAID, timeouts, OLLAMA_HOST)
 ├── .streamlit/
 │   └── config.toml           # Tema dark com os tokens da marca
 ├── dataset/                  # Dataset YOLOv8 (Roboflow, CC BY 4.0)
@@ -125,24 +146,27 @@ hackathon-stride-ai/
 │   ├── valid/                # 13 imagens
 │   └── test/                 # 6 imagens
 ├── models/
-│   └── best.pt               # Pesos YOLOv8n treinados (modelo do produto)
+│   ├── best.pt               # Pesos YOLOv8n treinados (modelo do produto)
+│   └── MODEL_CARD.md         # Model card: dataset, métricas e limitações do YOLO
+├── logs/                     # 🧾 Trilha de auditoria do LLM (llm_audit.jsonl) — runtime, git-ignored
 ├── src/
 │   ├── main.py               # 🖥️ App Streamlit — orquestra o pipeline completo
 │   ├── vision.py             # 1️⃣ Inferência YOLO (detecção das 7 classes)
 │   ├── ocr_engine.py         # 2️⃣3️⃣ OCR direcionado (EasyOCR): zonas + nomes
 │   ├── graph_builder.py      # 4️⃣ Grafo hierárquico (contenção, fluxos, hints)
-│   ├── prompts.py            # 5️⃣ System prompt do analista DevSecOps
-│   ├── stride_engine.py      # 5️⃣ Clientes LLM (LangChain + saída estruturada)
+│   ├── prompts.py            # 5️⃣6️⃣ System prompts do rewriter e do analista DevSecOps
+│   ├── stride_engine.py      # 5️⃣6️⃣ Motor LLM: analyst + rewriter, dual-provider (OpenAI/Ollama) + fallback
+│   ├── llm_audit.py          # 🧾 Trilha de auditoria por chamada de LLM (JSONL + logger)
 │   ├── stride_models.py      # Schema Pydantic do parecer + consolidação
 │   ├── visual_report.py      # Overlays, mapa numerado, recortes de risco
 │   ├── pdf_report.py         # Exportação do parecer em PDF (ReportLab)
-│   ├── progress.py           # Barra de progresso com ETA histórico
+│   ├── progress.py           # Barra de progresso com ETA histórico (6 etapas)
 │   ├── branding.py           # CSS injetado da marca (hero, pills, tabelas)
 │   └── theme.py              # Fonte única da paleta (tokens de cor)
-├── tests/                    # 53 testes unitários (pytest)
+├── tests/                    # 79 testes unitários (pytest)
 ├── train.py                  # Treinamento do YOLOv8n (100 épocas, imgsz=1024)
 ├── runs_train.log            # Log de treinamento (histórico de execução)
-├── requirements.txt          # Dependências de produção
+├── requirements.txt          # Dependências de produção (inclui ollama)
 └── requirements-dev.txt      # + pytest
 ```
 
@@ -162,7 +186,7 @@ hackathon-stride-ai/
 | **ReportLab** | Exportação do relatório em PDF com a mesma identidade (tema claro para impressão) | [src/pdf_report.py](src/pdf_report.py) |
 | **NumPy / Pillow / OpenCV** | Processamento de imagem: recortes, upscale, overlays, destaque de riscos | [src/visual_report.py](src/visual_report.py), [src/ocr_engine.py](src/ocr_engine.py) |
 | **Roboflow** | Anotação e versionamento do dataset (export YOLOv8) | [dataset/](dataset/) |
-| **pytest** | 53 testes unitários das camadas puras | [tests/](tests/) |
+| **pytest** | 79 testes unitários das camadas puras | [tests/](tests/) |
 
 > **Nota sobre identidade visual:** a paleta (ink `#050507`, navy `#12183A`, magenta `#EC0868` + 4 cores semânticas de severidade) vive em [src/theme.py](src/theme.py) como **fonte única**, consumida pela tela (CSS) e pelo PDF (ReportLab) — o hex nunca diverge entre o que a tela mostra e o que o PDF baixado mostra.
 
@@ -220,7 +244,7 @@ O system prompt ([src/prompts.py](src/prompts.py)) não pede "uma análise de se
 ### Pré-requisitos
 
 - **Python 3.12+** (desenvolvido e validado em 3.14)
-- Chave de API da **OpenAI** (o *analyst* usa GPT-5)
+- Chave de API da **OpenAI** (o *rewriter* usa GPT-4o e o *analyst* usa GPT-5) — **opcional** se rodar 100% local com `LLM_MODEL_PAID=false` (ver [Resiliência](#resiliência-fallback-local-via-ollama-opcional))
 - ~2 GB de espaço para as dependências (PyTorch CPU, EasyOCR)
 - **Opcional — [Ollama](https://ollama.com)** para o fallback local (ver abaixo)
 
@@ -300,7 +324,7 @@ python train.py
 
 ## 🧪 Testes
 
-As camadas puras do projeto (grafo, consolidação, tema, progresso, PDF, rastreabilidade visual) são cobertas por **53 testes unitários**:
+As camadas puras do projeto (grafo, consolidação, tema, progresso, PDF, rastreabilidade visual, motor de LLM e auditoria) são cobertas por **79 testes unitários**:
 
 ```bash
 pip install -r requirements-dev.txt
@@ -315,6 +339,9 @@ pytest
 | [tests/test_pdf_report.py](tests/test_pdf_report.py) | Geração do PDF a partir dos dados da sessão |
 | [tests/test_progress.py](tests/test_progress.py) | Estimador de ETA e persistência dos tempos |
 | [tests/test_theme.py](tests/test_theme.py) | Paleta e conversões de cor |
+| [tests/test_fallback_audit.py](tests/test_fallback_audit.py) | Fallback local (Ollama) e trilha de auditoria do LLM |
+| [tests/test_llm_model_paid.py](tests/test_llm_model_paid.py) | Seleção de provedor por `LLM_MODEL_PAID` (analyst e rewriter) |
+| [tests/test_rewriter.py](tests/test_rewriter.py) | Etapa de enriquecimento (`narrative_summary`) e dual-provider do rewriter |
 
 ---
 
