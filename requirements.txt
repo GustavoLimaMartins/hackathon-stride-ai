@@ -50,6 +50,7 @@ networkx==3.6.1
 ninja==1.13.0
 numpy==2.5.1
 nvidia-ml-py==13.610.43
+ollama==0.6.2
 openai==2.45.0
 opencv-python==5.0.0.93
 opencv-python-headless==5.0.0.93

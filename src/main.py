@@ -34,7 +34,16 @@ if str(_PROJECT_ROOT) not in sys.path:
 load_dotenv(_PROJECT_ROOT / ".env")
 
 import streamlit as st
-from langchain_core.messages import HumanMessage, SystemMessage
+from openai import APITimeoutError
+
+# O 'ollama' é dependência do fallback local. Import defensivo: se o pacote não
+# estiver instalado, usamos um placeholder que nunca casa num except, para o
+# app rodar normalmente pelo caminho OpenAI sem exigir o Ollama.
+try:
+    from ollama import ResponseError as OllamaResponseError
+except ImportError:  # pragma: no cover - ambiente sem o fallback instalado
+    class OllamaResponseError(Exception):
+        """Placeholder quando o pacote 'ollama' não está instalado."""
 
 from src import branding, theme
 from src.graph_builder import to_json
@@ -49,7 +58,18 @@ from src.progress import (
     save_timing,
 )
 from src.prompts import STRIDE_ANALYST_SYSTEM_PROMPT, build_stride_user_message
-from src.stride_engine import load_analyst_structured
+from src.stride_engine import (
+    _ANALYST_TIMEOUT_SECONDS,
+    load_ollama_analyst,
+    load_ollama_rewriter,
+    load_primary_analyst,
+    load_primary_rewriter,
+)
+
+# Minutos do timeout do 'analyst', para as mensagens ao usuário refletirem o
+# valor real configurado via .env (ANALYST_TIMEOUT_SECONDS) em vez de "10 min"
+# fixo no texto.
+_ANALYST_TIMEOUT_MINUTES = _ANALYST_TIMEOUT_SECONDS // 60
 from src.stride_models import group_risks
 from src.vision import _load_image, detect
 from src.visual_report import (
@@ -192,6 +212,101 @@ def _run_step(bar, log_ph, done: list[str], estimator: StepEstimator, step: str,
     return result
 
 
+def _run_analyst(analyst, graph, bar, estimator, label_suffix=""):
+    """Roda a etapa longa do LLM (analyst.analyze) numa thread, animando a barra.
+
+    A chamada ao analyst é BLOQUEANTE e pode levar minutos; roda num
+    ThreadPoolExecutor para a barra continuar respondendo (o loop anima o
+    progresso contra o ETA enquanto o future não termina). Recebe um BaseAnalyst
+    (OpenAI padrão ou Ollama fallback) — ambos expõem .analyze(system, user) e
+    devolvem o mesmo StrideReport. 'label_suffix' distingue o fallback na barra.
+    Propaga a exceção do analyst (ex.: APITimeoutError) ao chamador.
+    """
+    llm_label = STEP_LABELS["llm"] + label_suffix
+    llm_number = STEP_KEYS.index("llm") + 1
+    system_prompt = STRIDE_ANALYST_SYSTEM_PROMPT
+    user_message = build_stride_user_message(graph)
+
+    t0 = time.monotonic()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(analyst.analyze, system_prompt, user_message)
+        while not future.done():
+            elapsed = time.monotonic() - t0
+            percent = estimator.step_percent("llm", elapsed)
+            bar.progress(
+                estimator.fraction("llm", elapsed),
+                text=f"{llm_number}. {llm_label}… {percent}% ({format_elapsed(elapsed)})",
+            )
+            time.sleep(0.2)
+        report = future.result()  # propaga exceção da thread (ex.: APITimeoutError)
+    save_timing("llm", time.monotonic() - t0)
+    return report
+
+
+def _run_rewriter(rewriter, graph, bar, estimator, label_suffix=""):
+    """Roda a etapa 'rewriter' (rewriter.rewrite) numa thread, animando a barra.
+
+    Espelha _run_analyst, mas para a etapa de enriquecimento: recebe um
+    BaseRewriter (OpenAI padrão ou Ollama fallback), passa o grafo (dict) e
+    devolve o grafo enriquecido com 'narrative_summary'. 'label_suffix'
+    distingue o fallback na barra. Propaga a exceção do rewriter ao chamador
+    (que decide degradar graciosamente).
+    """
+    rw_label = STEP_LABELS["rewriter"] + label_suffix
+    rw_number = STEP_KEYS.index("rewriter") + 1
+
+    t0 = time.monotonic()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(rewriter.rewrite, graph)
+        while not future.done():
+            elapsed = time.monotonic() - t0
+            percent = estimator.step_percent("rewriter", elapsed)
+            bar.progress(
+                estimator.fraction("rewriter", elapsed),
+                text=f"{rw_number}. {rw_label}… {percent}% ({format_elapsed(elapsed)})",
+            )
+            time.sleep(0.2)
+        enriched = future.result()  # propaga exceção da thread
+    save_timing("rewriter", time.monotonic() - t0)
+    return enriched
+
+
+def _enrich_graph(graph, bar, estimator):
+    """Roda a etapa 'rewriter' com fallback e degradação graciosa.
+
+    Tenta o rewriter principal (OpenAI ou Ollama, conforme LLM_MODEL_PAID); no
+    timeout do gpt-4o, tenta o Ollama como contingência. Se ambos falharem
+    (etapa NÃO crítica), avisa e devolve o grafo ORIGINAL sem 'narrative_summary'
+    — o pipeline segue normalmente. Fecha a fatia da etapa na barra em qualquer
+    caminho (a etapa 'llm' seguinte começa na fração correta). Nunca levanta.
+    """
+    result = graph
+    try:
+        result = _run_rewriter(load_primary_rewriter(), graph, bar, estimator)
+    except APITimeoutError:
+        try:
+            result = _run_rewriter(
+                load_ollama_rewriter(),
+                graph,
+                bar,
+                estimator,
+                label_suffix=" (fallback local)",
+            )
+        except Exception:
+            st.warning(
+                "⚠️ Etapa de enriquecimento do grafo indisponível; "
+                "seguindo a análise sem o contexto narrativo extra."
+            )
+    except Exception:
+        st.warning(
+            "⚠️ Etapa de enriquecimento do grafo indisponível; "
+            "seguindo a análise sem o contexto narrativo extra."
+        )
+    # Fecha a fatia na barra (rewriter não é a última etapa) em sucesso OU falha.
+    bar.progress(estimator.step_end("rewriter"), text=STEP_LABELS["rewriter"])
+    return result
+
+
 branding.render_hero()
 
 st.markdown(
@@ -265,35 +380,54 @@ if uploaded_file is not None:
 
             graph = _run_step(bar, log_ph, done, estimator, "graph", _graph)
 
-            # O 'analyst' (gpt-5) devolve o parecer como StrideReport estruturado:
-            # cada risco já traz o id do elemento afetado, o que permite ligar a
-            # ameaça ao seu ponto exato no diagrama. É um modelo de reasoning que
-            # leva minutos — chamada BLOQUEANTE. Para a barra não congelar, roda
-            # numa thread e animamos o progresso contra o ETA enquanto esperamos.
-            analyst = load_analyst_structured()
-            messages = [
-                SystemMessage(content=STRIDE_ANALYST_SYSTEM_PROMPT),
-                HumanMessage(content=build_stride_user_message(graph)),
-            ]
+            # Etapa 'rewriter' (enriquecimento): um LLM resume o padrão
+            # arquitetural do grafo e adiciona 'narrative_summary' como CONTEXTO
+            # auxiliar para o analyst (o system prompt orienta a nunca tratá-lo
+            # como fonte de ids/fatos). _enrich_graph encapsula provedor
+            # principal (LLM_MODEL_PAID), fallback Ollama no timeout e degradação
+            # graciosa: se a etapa falhar, devolve o grafo original e segue —
+            # nunca aborta o pipeline.
+            graph = _enrich_graph(graph, bar, estimator)
+            done.append(f"{STEP_KEYS.index('rewriter') + 1}. {STEP_LABELS['rewriter']}")
+            _render_log(log_ph, done)
+
+            # O 'analyst' devolve o parecer como StrideReport estruturado: cada
+            # risco já traz o id do elemento afetado, o que permite ligar a
+            # ameaça ao seu ponto exato no diagrama. É uma chamada BLOQUEANTE de
+            # minutos; _run_analyst a roda numa thread animando a barra.
+            #
+            # Provedor principal conforme LLM_MODEL_PAID (.env): true (default)
+            # usa a OpenAI (gpt-5); false usa o Ollama (gemma3:12b) direto, sem
+            # tentar a OpenAI. Resiliência: quando o principal É a OpenAI e ela
+            # estoura o timeout (ANALYST_TIMEOUT_SECONDS, default 10 min),
+            # caímos para o modelo LOCAL como fallback — o Ollama não levanta
+            # APITimeoutError, então esse ramo não dispara quando ele já é o
+            # principal. Ambos devolvem o MESMO StrideReport, então o restante
+            # do fluxo (group_risks, overlays, PDF) segue idêntico.
             llm_label = STEP_LABELS["llm"]
             llm_number = STEP_KEYS.index("llm") + 1
-            t0 = time.monotonic()
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(analyst.invoke, messages)
-                while not future.done():
-                    elapsed = time.monotonic() - t0
-                    # Cronômetro + percentual estimado (elapsed / tempo médio do
-                    # LLM) dão "sinal de vida" durante a espera longa; ficam só na
-                    # barra, não no log de etapas.
-                    percent = estimator.step_percent("llm", elapsed)
-                    bar.progress(
-                        estimator.fraction("llm", elapsed),
-                        text=f"{llm_number}. {llm_label}… {percent}% ({format_elapsed(elapsed)})",
-                    )
-                    time.sleep(0.2)
-                report = future.result()  # propaga exceção da thread ao except
+            try:
+                report = _run_analyst(
+                    load_primary_analyst(), graph, bar, estimator
+                )
+            except APITimeoutError:
+                # OpenAI lenta demais: avisa e tenta o fallback local. Se o
+                # Ollama também falhar (não instalado / sem daemon / modelo
+                # ausente), a exceção sobe para os except de fora.
+                st.warning(
+                    f"⏱️ A OpenAI está demorando além do limite de "
+                    f"{_ANALYST_TIMEOUT_MINUTES} min (provável carga/horário de "
+                    "pico). Tentando o modelo local de contingência "
+                    "(Ollama · gemma3:12b)…"
+                )
+                report = _run_analyst(
+                    load_ollama_analyst(),
+                    graph,
+                    bar,
+                    estimator,
+                    label_suffix=" (fallback local)",
+                )
 
-            save_timing("llm", time.monotonic() - t0)
             bar.progress(1.0, text="Concluído")
             done.append(f"{llm_number}. {llm_label}")
             _render_log(log_ph, done)
@@ -407,6 +541,29 @@ if uploaded_file is not None:
         except RuntimeError as e:
             # Ex.: OPENAI_API_KEY ausente (erro claro levantado por load_llm).
             st.error(f"Configuração ausente: {e}")
+            st.stop()
+        except APITimeoutError:
+            # Só chega aqui se o timeout da OpenAI subir sem ter sido tratado
+            # pelo fallback (defensivo — o fluxo normal captura o timeout e tenta
+            # o Ollama antes disso). Mensagem clara em vez de stacktrace cru.
+            st.error(
+                f"A análise STRIDE excedeu o tempo limite de "
+                f"{_ANALYST_TIMEOUT_MINUTES} minutos e o modelo local de "
+                "contingência não pôde assumir. Tente novamente em alguns "
+                "minutos ou em um horário de menor demanda."
+            )
+            st.stop()
+        except (ConnectionError, OllamaResponseError) as e:
+            # Fallback local acionado, mas o Ollama não está disponível: daemon
+            # fora do ar (ConnectionError) ou modelo não baixado (ResponseError).
+            st.error(
+                "A OpenAI excedeu o tempo limite e o modelo local de "
+                "contingência (Ollama · gemma3:12b) não está disponível. "
+                "Verifique se o Ollama está em execução (`ollama serve`) e se o "
+                "modelo foi baixado (`ollama pull gemma3:12b`), ou tente a "
+                "análise novamente mais tarde.\n\n"
+                f"Detalhe técnico: {e}"
+            )
             st.stop()
         except Exception as e:
             st.error(f"Falha ao processar o diagrama: {e}")

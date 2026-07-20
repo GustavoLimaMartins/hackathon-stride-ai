@@ -81,6 +81,16 @@ de visão computacional — não é a confiança da sua própria análise de ame
 Valores baixos indicam que a existência ou classificação daquele elemento é \
 incerta; mencione essa incerteza ao invés de tratá-la como um fato do \
 diagrama.
+- `narrative_summary` (opcional): quando presente, é um **resumo textual em \
+linguagem natural** do diagrama, gerado por outro modelo a partir do mesmo \
+JSON. Trate-o **apenas como contexto interpretativo** — uma síntese que pode \
+ajudar a entender o papel provável dos componentes e o padrão arquitetural. \
+**NUNCA** o use como fonte de `id`s, de componentes, de zonas ou de conexões: \
+todos os riscos e todos os `target_id` devem continuar ancorados \
+**exclusivamente** nas chaves estruturais (`trust_boundaries`, \
+`unassigned_components`, `data_flows`, `proximity_hints`). Se a narrativa \
+mencionar algo que não esteja nessas chaves estruturais, **ignore** — o JSON \
+estrutural é a única fonte de verdade sobre o que existe no diagrama.
 
 ## Atenção redobrada a fronteiras cruzadas
 
@@ -201,9 +211,52 @@ def build_stride_user_message(graph: dict) -> str:
     Serializa 'graph' (a saída de graph_builder.to_json()) e a acopla a uma
     instrução curta, formando o conteúdo a ser enviado como HumanMessage ao
     LLM 'analyst' junto de STRIDE_ANALYST_SYSTEM_PROMPT como SystemMessage.
+
+    Se o grafo tiver a chave opcional 'narrative_summary' (adicionada pela
+    etapa 'rewriter'), ela é serializada junto no JSON automaticamente — o
+    system prompt já orienta o analyst a tratá-la só como contexto auxiliar.
     """
     graph_json = json.dumps(graph, indent=2, ensure_ascii=False)
     return (
         "Analise o seguinte diagrama de arquitetura, representado em JSON:"
         f"\n\n{graph_json}"
     )
+
+
+# --- Prompt da etapa 'rewriter' (enriquecimento do grafo) --------------------
+
+_REWRITER_SYSTEM_PROMPT = """\
+Você é um arquiteto de software analisando um diagrama de arquitetura cloud \
+representado em JSON estruturado (produzido por visão computacional + OCR).
+
+Sua tarefa é escrever um resumo conciso, em português, que interprete o \
+diagrama para um leitor humano:
+- Qual o padrão arquitetural provável (ex.: três camadas, microsserviços, \
+event-driven, borda/edge, etc.).
+- O papel provável de cada componente relevante, referindo-se a ele pelo \
+`name` real quando houver (ex.: "o Amazon Lambda atua como camada de \
+computação serverless").
+- Como as zonas de confiança e os fluxos de dados se relacionam em alto nível.
+
+Regras:
+- Baseie-se **exclusivamente** no que está no JSON. Não invente componentes, \
+zonas ou conexões que não estejam presentes.
+- Seja conciso: no máximo três parágrafos curtos. É um resumo de contexto, \
+não uma análise de segurança (essa vem numa etapa posterior).
+- Escreva texto corrido, sem listas nem JSON. Não repita os `id`s crus."""
+
+
+def build_rewriter_prompt(graph: dict) -> tuple[str, str]:
+    """Monta (system_prompt, user_message) para a etapa 'rewriter'.
+
+    O rewriter recebe o mesmo grafo de graph_builder.to_json() e produz um
+    resumo narrativo em texto (contexto arquitetural) que enriquece o grafo
+    antes do analyst. Retorna as duas strings prontas para o provedor
+    (LangChain/OpenAI ou Ollama), espelhando o par usado pelo analyst.
+    """
+    graph_json = json.dumps(graph, indent=2, ensure_ascii=False)
+    user_message = (
+        "Resuma o padrão arquitetural e o papel dos componentes do seguinte "
+        f"diagrama, representado em JSON:\n\n{graph_json}"
+    )
+    return _REWRITER_SYSTEM_PROMPT, user_message

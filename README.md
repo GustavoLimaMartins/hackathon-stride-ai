@@ -54,7 +54,7 @@ Mapeamento objetivo do edital → entrega no repositório:
 
 ## 🏗️ Arquitetura da solução
 
-O pipeline é **síncrono e encadeado em 5 etapas** — ao clicar em "Analisar diagrama", a imagem percorre visão → OCR → grafo → LLM, e o parecer é renderizado:
+O pipeline é **síncrono e encadeado em 6 etapas** — ao clicar em "Analisar diagrama", a imagem percorre visão → OCR → grafo → enriquecimento → LLM, e o parecer é renderizado:
 
 ```mermaid
 flowchart TD
@@ -66,7 +66,9 @@ flowchart TD
     O1 --> G["4 · Engenharia espacial<br/><code>graph_builder.to_json</code><br/>contenção geométrica + data_flows + proximity_hints"]
     O2 --> G
 
-    G -->|"grafo JSON hierárquico"| L["5 · LLM analyst — GPT-5 via LangChain<br/><code>stride_engine.load_analyst_structured</code><br/>with_structured_output(StrideReport)"]
+    G -->|"grafo JSON hierárquico"| R["5 · Enriquecimento — GPT-4o / Ollama<br/><code>stride_engine.load_primary_rewriter</code><br/>resumo do padrão arquitetural (não crítico)"]
+
+    R -->|"grafo + narrative_summary"| L["6 · LLM analyst — GPT-5 via LangChain<br/><code>stride_engine.load_primary_analyst</code><br/>with_structured_output(StrideReport)"]
 
     L --> C["Consolidação por elemento<br/><code>stride_models.group_risks</code><br/>1 bloco por componente/fluxo/zona"]
 
@@ -74,12 +76,13 @@ flowchart TD
     C --> PDF["📄 Exportação PDF — ReportLab<br/><code>src/pdf_report.py</code>"]
 
     style U fill:#12183A,stroke:#EC0868,color:#F7F5F3
+    style R fill:#12183A,stroke:#EC0868,color:#F7F5F3
     style L fill:#12183A,stroke:#EC0868,color:#F7F5F3
     style UI fill:#EC0868,stroke:#EC0868,color:#F7F5F3
     style PDF fill:#EC0868,stroke:#EC0868,color:#F7F5F3
 ```
 
-### As 5 etapas em detalhe
+### As 6 etapas em detalhe
 
 **1 · Visão computacional ([src/vision.py](src/vision.py))** — O modelo YOLOv8 Nano (fine-tuned neste projeto) detecta as 7 classes do diagrama. A inferência roda em **RGB** (a cor é sinal semântico forte em ícones cloud: compute, database e storage se distinguem primariamente pela cor) com `imgsz=1024` — o mesmo tamanho do treino — e filtro global de confiança de **25%**, calibrado para cortar o ruído da classe `data_flow` (a mais instável do modelo). As detecções são separadas em duas listas: `trust_boundaries` e demais componentes.
 
@@ -94,7 +97,9 @@ flowchart TD
 
 O resultado é um **JSON hierárquico**: zonas nomeadas com seus componentes aninhados, componentes órfãos (`unassigned_components`), fluxos e hints.
 
-**5 · Análise STRIDE por LLM ([src/stride_engine.py](src/stride_engine.py), [src/prompts.py](src/prompts.py))** — O motor define dois papéis via LangChain: `rewriter` (**GPT-4o**, apoio à interpretação de dados brutos) e `analyst` (**GPT-5**, modelo de reasoning que elabora o parecer final). O *analyst* recebe um system prompt de **arquiteto DevSecOps sênior** e o grafo JSON como mensagem, e é envolvido por `with_structured_output(StrideReport)`: a resposta **não é texto livre**, é um objeto Pydantic validado — uma lista de riscos em que **cada risco aponta o `id` exato do elemento afetado no grafo**. Esse vínculo `id → bounding box` é o que sustenta a rastreabilidade visual (risco → recorte do diagrama). Como a chamada leva minutos, ela roda numa *thread* separada enquanto a barra de progresso anima contra o ETA histórico.
+**5 · Enriquecimento do grafo — `rewriter` ([src/stride_engine.py](src/stride_engine.py), [src/prompts.py](src/prompts.py))** — Uma etapa curta usa o papel `rewriter` (**GPT-4o**, ou o modelo local via Ollama) para resumir em texto o **padrão arquitetural** do diagrama e adicioná-lo ao grafo como `narrative_summary`. É **contexto auxiliar** para o analyst — o system prompt do analyst é explícito em nunca tratá-lo como fonte de `id`s ou fatos estruturais (a rastreabilidade continua ancorada só no JSON). É uma etapa **não crítica**: se falhar (timeout ou provedor indisponível), o pipeline segue sem o resumo, sem abortar.
+
+**6 · Análise STRIDE por LLM — `analyst` ([src/stride_engine.py](src/stride_engine.py), [src/prompts.py](src/prompts.py))** — O papel `analyst` (**GPT-5**, modelo de reasoning) recebe um system prompt de **arquiteto DevSecOps sênior** e o grafo JSON (já com o `narrative_summary`) como mensagem, e é envolvido por `with_structured_output(StrideReport)`: a resposta **não é texto livre**, é um objeto Pydantic validado — uma lista de riscos em que **cada risco aponta o `id` exato do elemento afetado no grafo**. Esse vínculo `id → bounding box` é o que sustenta a rastreabilidade visual (risco → recorte do diagrama). Como a chamada leva minutos, ela roda numa *thread* separada enquanto a barra de progresso anima contra o ETA histórico.
 
 ### Camada de apresentação
 
@@ -217,6 +222,7 @@ O system prompt ([src/prompts.py](src/prompts.py)) não pede "uma análise de se
 - **Python 3.12+** (desenvolvido e validado em 3.14)
 - Chave de API da **OpenAI** (o *analyst* usa GPT-5)
 - ~2 GB de espaço para as dependências (PyTorch CPU, EasyOCR)
+- **Opcional — [Ollama](https://ollama.com)** para o fallback local (ver abaixo)
 
 ### Instalação
 
@@ -253,6 +259,32 @@ streamlit run src/main.py
 ```
 
 Abra o navegador (por padrão `http://localhost:8501`), envie um diagrama de arquitetura cloud e clique em **"🔍 Analisar diagrama"**. A análise completa leva alguns minutos — a etapa do LLM de reasoning domina o tempo total; a barra de progresso mostra o ETA.
+
+### Resiliência: fallback local via Ollama (opcional)
+
+O tempo de resposta do `analyst` (GPT-5) depende da latência da OpenAI, que varia com a carga/horário. Para o app entregar um parecer mesmo quando a API está lenta, há um **fallback automático para um modelo local**: se a chamada à OpenAI ultrapassar o timeout (padrão **10 minutos**, configurável via `ANALYST_TIMEOUT_SECONDS` no `.env` — ver [.env.example](.env.example)), o app cai para o **`gemma3:12b` via [Ollama](https://ollama.com)**, exibindo um aviso e seguindo o mesmo fluxo (o modelo local devolve o mesmo parecer STRIDE estruturado, preservando a rastreabilidade risco→diagrama).
+
+Para habilitar o fallback:
+
+```bash
+# 1. Instale o Ollama (https://ollama.com) e deixe o daemon rodando:
+ollama serve
+
+# 2. Baixe o modelo (uma vez):
+ollama pull gemma3:12b
+```
+
+Sem o Ollama instalado/rodando, o app funciona normalmente pelo caminho OpenAI; o fallback só é acionado no timeout e, se indisponível, exibe uma mensagem clara. O host do daemon é configurável via `OLLAMA_HOST` (ver [.env.example](.env.example)). O `gemma3:12b` (~8 GB) roda em CPU sem GPU dedicada e cabe em máquinas modestas; em hardware com mais folga (disco/RAM/GPU) troque por `gemma3:27b` para um parecer mais rico, ajustando `_OLLAMA_ANALYST_MODEL` em [src/stride_engine.py](src/stride_engine.py).
+
+> ⚠️ Em CPU pura o modelo local é lento (minutos por parecer). É uma contingência para quando a OpenAI está indisponível, não o caminho preferencial.
+
+**Etapa de enriquecimento (`rewriter`)**: antes do `analyst`, uma etapa curta usa um LLM (`gpt-4o`) para gerar um **resumo do padrão arquitetural** do diagrama, adicionado ao grafo como contexto auxiliar para o parecer STRIDE. É uma etapa **não crítica**: se falhar (timeout ou provedor indisponível), o app segue a análise sem o resumo, sem abortar. Seu timeout é configurável via `REWRITER_TIMEOUT_SECONDS` (default 60s).
+
+**Provedor principal via `LLM_MODEL_PAID`**: além do fallback automático por timeout, dá para inverter qual provedor é o *principal* dos **dois** papéis (`rewriter` e `analyst`) desde o início, via `LLM_MODEL_PAID` no `.env`. `true` (default) mantém a OpenAI (gpt-4o no rewriter, gpt-5 no analyst) como principal, com o Ollama como contingência. `false` faz o Ollama (`gemma3:12b`) ser usado direto nos dois papéis, sem tentar a OpenAI nem exigir `OPENAI_API_KEY` — útil para rodar 100% local, sem custo de API.
+
+### Trilha de auditoria do processamento LLM
+
+Cada análise grava um **registro de auditoria** para rastreabilidade — qual provedor/modelo atendeu (`openai/gpt-5` ou `ollama/gemma3:12b`), se foi fallback, duração, status (`success`/`timeout`/`error`) e tamanho (tokens no caso OpenAI; nº de riscos no fallback). Os registros vão para o logger `stride.llm_audit` e, em formato JSONL (uma linha por análise), para **`logs/llm_audit.jsonl`** (diretório ignorado no git). Ver [src/llm_audit.py](src/llm_audit.py).
 
 ### Retreinando o modelo (opcional)
 

@@ -26,6 +26,7 @@ STEPS: list[tuple[str, str]] = [
     ("ocr_zones", "Lendo rótulos das zonas (OCR)"),
     ("ocr_components", "Associando rótulos aos componentes (OCR)"),
     ("graph", "Montando o grafo hierárquico"),
+    ("rewriter", "Enriquecendo o grafo com contexto (LLM)"),
     ("llm", "Analisando ameaças (STRIDE)"),
 ]
 
@@ -39,6 +40,7 @@ DEFAULT_TIMINGS: dict[str, float] = {
     "ocr_zones": 10.0,
     "ocr_components": 10.0,
     "graph": 1.0,
+    "rewriter": 8.0,
     "llm": 90.0,
 }
 
